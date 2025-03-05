@@ -44,8 +44,10 @@ export class Ball {
     start() {
         // Random initial direction
         const angle = (Math.random() * Math.PI / 2) - Math.PI / 4; // -45 to 45 degrees
+        // Randomly choose a direction (toward player or AI)
+        const direction = Math.random() > 0.5 ? 1 : -1;
         this.ballVelocity.x = Math.sin(angle) * this.initialSpeed;
-        this.ballVelocity.z = Math.cos(angle) * this.initialSpeed;
+        this.ballVelocity.z = Math.cos(angle) * this.initialSpeed * direction;
     }
 
     getBall() {

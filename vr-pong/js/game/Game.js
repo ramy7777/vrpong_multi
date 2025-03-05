@@ -452,6 +452,13 @@ export class Game {
         this.startButton.hide();
         this.multiplayerMenu.hide();
         
+        // Position paddles correctly for multiplayer
+        // In multiplayer, player paddle is always on near side, opponent on far side
+        // For host: playerPaddle near, aiPaddle far
+        // For guest: playerPaddle near, aiPaddle far (same positioning but different controls)
+        this.playerPaddle.getPaddle().position.z = -0.1; // Near side of table
+        this.aiPaddle.getPaddle().position.z = -1.9;     // Far side of table
+        
         // Show a message
         this.showMessage('Game started!', 3000);
         

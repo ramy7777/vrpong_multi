@@ -31,6 +31,8 @@ export class Paddle {
             opacity: 0.8
         });
         this.paddle = new THREE.Mesh(paddleGeometry, paddleMaterial);
+        
+        // Position player paddle at near end (-0.1) and AI/opponent paddle at far end (-1.9)
         this.paddle.position.set(0, 0.9, this.isAI ? -1.9 : -0.1);
 
         // Add glow effect
