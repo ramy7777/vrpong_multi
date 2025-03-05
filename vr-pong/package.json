@@ -1,0 +1,19 @@
+{
+  "name": "vr-pong",
+  "version": "1.0.0",
+  "description": "WebVR Pong game for Meta Quest 3",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "selfsigned": "^2.4.1",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

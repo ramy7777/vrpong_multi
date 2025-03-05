@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>VR Pong</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="A WebXR Pong game for Meta Quest">
+    <style>
+        body { margin: 0; background-color: #000; }
+        canvas { display: block; }
+        .game-buttons {
+            position: absolute;
+            top: 20px;
+            left: 0;
+            right: 0;
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+        }
+        #startVR {
+            padding: 12px 24px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        #startDesktop {
+            padding: 12px 24px;
+            background: #2196F3;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        #noVR {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: white;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 8px;
+        }
+        #errorMessage {
+            display: none;
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+            color: white;
+            background: rgba(255, 0, 0, 0.7);
+            padding: 10px 20px;
+            border-radius: 4px;
+            font-family: Arial, sans-serif;
+            max-width: 80%;
+        }
+        #loadingMessage {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 18px;
+            font-family: Arial, sans-serif;
+        }
+        #instructions {
+            position: absolute;
+            bottom: 20px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            color: white;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            font-family: Arial, sans-serif;
+        }
+    </style>
+    <!-- Include Socket.IO client library from CDN -->
+    <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
+</head>
+<body>
+    <div class="game-buttons">
+        <button id="startVR">Enter VR Mode</button>
+        <button id="startDesktop">Play in Browser</button>
+    </div>
+    
+    <div id="noVR">
+        <h2>WebXR Not Available</h2>
+        <p>This game requires a WebXR-compatible device and browser.</p>
+        <p>Please use a Meta Quest or other VR headset.</p>
+        <p>Alternatively, you can play in desktop mode!</p>
+        <button id="fallbackDesktop" style="padding: 12px 24px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 15px;">Play in Desktop Mode</button>
+    </div>
+    
+    <div id="errorMessage"></div>
+    <div id="loadingMessage">Loading game assets...</div>
+    
+    <div id="instructions" style="display: none;">
+        <h3>Desktop Controls</h3>
+        <p>Use the Arrow Keys or A/D to move your paddle left and right</p>
+        <p>Press Space to start the game</p>
+        <p>Click and drag with the mouse to control the paddle</p>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.158.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.158.0/examples/jsm/",
+            "socket.io-client": "https://cdn.socket.io/4.6.0/socket.io.esm.min.js"
+        }
+    }
+    </script>
+    <script type="module">
+        import { Game } from './js/game/Game.js';
+        let game;
+        
+        // Error handling
+        window.addEventListener('error', function(event) {
+            const errorMsg = document.getElementById('errorMessage');
+            errorMsg.textContent = `Error: ${event.message}`;
+            errorMsg.style.display = 'block';
+            console.error('Game error:', event.error);
+        });
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const loadingMsg = document.getElementById('loadingMessage');
+            const startVRBtn = document.getElementById('startVR');
+            const startDesktopBtn = document.getElementById('startDesktop');
+            const fallbackDesktopBtn = document.getElementById('fallbackDesktop');
+            const instructions = document.getElementById('instructions');
+            
+            // Function to start the game
+            const startGame = (vrMode = false) => {
+                try {
+                    // Hide buttons, show loading
+                    document.querySelector('.game-buttons').style.display = 'none';
+                    loadingMsg.style.display = 'block';
+                    
+                    // Initialize the game
+                    game = new Game();
+                    
+                    // If desktop mode, show instructions
+                    if (!vrMode) {
+                        instructions.style.display = 'block';
+                    }
+                    
+                    loadingMsg.style.display = 'none';
+                } catch (error) {
+                    loadingMsg.style.display = 'none';
+                    const errorMsg = document.getElementById('errorMessage');
+                    errorMsg.textContent = `Failed to initialize game: ${error.message}`;
+                    errorMsg.style.display = 'block';
+                    console.error('Game initialization error:', error);
+                }
+            };
+            
+            // Check if WebXR is available
+            if ('xr' in navigator) {
+                navigator.xr.isSessionSupported('immersive-vr').then(supported => {
+                    if (!supported) {
+                        startVRBtn.style.display = 'none';
+                        document.getElementById('noVR').style.display = 'block';
+                    }
+                });
+            } else {
+                startVRBtn.style.display = 'none';
+                document.getElementById('noVR').style.display = 'block';
+            }
+            
+            // Event listeners for buttons
+            startVRBtn.addEventListener('click', () => {
+                startGame(true);
+            });
+            
+            startDesktopBtn.addEventListener('click', () => {
+                startGame(false);
+            });
+            
+            fallbackDesktopBtn.addEventListener('click', () => {
+                document.getElementById('noVR').style.display = 'none';
+                startGame(false);
+            });
+        });
+    </script>
+</body>
+</html>
