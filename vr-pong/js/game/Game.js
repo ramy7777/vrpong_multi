@@ -26,6 +26,10 @@ export class Game {
         this.isLocalPlayer = true; // Player is host by default
         this.isInVR = false; // Track if user is in VR
         
+        // Button interaction state tracking
+        this.lastButtonPressController = null;
+        this.lastButtonPressTime = 0;
+        
         // Scoring
         this.playerScore = 0;
         this.aiScore = 0;
@@ -236,14 +240,18 @@ export class Game {
                 if (!this.isGameStarted && this.startButton) {
                     const startButtonIntersects = raycaster.intersectObject(this.startButton.getMesh(), true);
                     if (startButtonIntersects.length > 0) {
-                        // Prevent double-clicks
-                        if (this.startButton.isPressed) return;
-                        
+                        // Button press is now handled in the StartButton.press() method
+                        // which includes cooldown and automatic unhighlight
                         this.startButton.press();
                         
+                        // Log button press time for debugging
+                        console.log(`Start button pressed at ${Date.now()}`);
+                        
+                        // Proceed with game logic after successful press
                         if (this.multiplayerManager.isConnected) {
                             // Only show multiplayer menu if not already in a multiplayer game
                             if (!this.multiplayerManager.isInMultiplayerGame()) {
+                                console.log('Showing multiplayer menu');
                                 this.startButton.hide();
                                 this.multiplayerMenu.show();
                             } else if (this.multiplayerManager.isHosting()) {
@@ -252,6 +260,7 @@ export class Game {
                                 this.multiplayerManager.startGame();
                             }
                         } else {
+                            console.log('Starting single player game');
                             this.isGameStarted = true;
                             this.playerScore = 0;
                             this.aiScore = 0;
@@ -668,75 +677,108 @@ export class Game {
                 
                 if (leftIntersects) {
                     this.multiplayerMenu.highlightButton(leftIntersects.button);
-                    if (this.vrController.controllers[0].userData.isSelecting) {
+                    // Only process button press on the initial press event, not while holding
+                    if (this.vrController.controllers[0].userData.isSelecting && 
+                        this.vrController.controllers[0].userData.isNewPress) {
+                        console.log(`VR multiplayer menu button press: ${leftIntersects.button}`);
                         this.multiplayerMenu.pressButton(leftIntersects.button);
                     }
                 }
                 
                 if (rightIntersects) {
                     this.multiplayerMenu.highlightButton(rightIntersects.button);
-                    if (this.vrController.controllers[1].userData.isSelecting) {
+                    // Only process button press on the initial press event, not while holding
+                    if (this.vrController.controllers[1].userData.isSelecting && 
+                        this.vrController.controllers[1].userData.isNewPress) {
+                        console.log(`VR multiplayer menu button press: ${rightIntersects.button}`);
                         this.multiplayerMenu.pressButton(rightIntersects.button);
                     }
                 }
             }
 
-            const prevBallZ = this.ball.getBall().position.z;
-            const prevBallX = this.ball.getBall().position.x;
+            // Get previous ball position for physics/sound calculations
+            const prevBallZ = this.ball ? this.ball.getBall().position.z : 0;
+            const prevBallX = this.ball ? this.ball.getBall().position.x : 0;
 
             if (!this.isGameStarted && this.isInVR) {
                 const leftIntersects = this.startButton.checkIntersection(this.vrController.controllers[0]);
                 const rightIntersects = this.startButton.checkIntersection(this.vrController.controllers[1]);
                 
+                // Add debug logging for intersections
                 if (leftIntersects || rightIntersects) {
+                    console.log(`VR controller intersecting start button: Left: ${leftIntersects ? 'YES' : 'NO'}, Right: ${rightIntersects ? 'YES' : 'NO'}`);
+                    console.log(`Left controller selecting: ${this.vrController.controllers[0].userData.isSelecting}, Right controller selecting: ${this.vrController.controllers[1].userData.isSelecting}`);
+                    console.log(`Left controller isNewPress: ${this.vrController.controllers[0].userData.isNewPress}, Right controller isNewPress: ${this.vrController.controllers[1].userData.isNewPress}`);
+                
                     this.startButton.highlight();
-                    if (this.vrController.controllers[0].userData.isSelecting || 
-                        this.vrController.controllers[1].userData.isSelecting) {
-                        this.startButton.press();
+                    
+                    // Only process button press on the initial press event, not while holding
+                    const leftIsNewPress = leftIntersects && this.vrController.controllers[0].userData.isSelecting && this.vrController.controllers[0].userData.isNewPress;
+                    const rightIsNewPress = rightIntersects && this.vrController.controllers[1].userData.isSelecting && this.vrController.controllers[1].userData.isNewPress;
+                    
+                    if (leftIsNewPress || rightIsNewPress) {
+                        console.log(`New VR button press detected: Left=${leftIsNewPress}, Right=${rightIsNewPress}`);
                         
-                        // Check if we're showing the multiplayer menu instead of starting
-                        if (this.multiplayerManager.isConnected && !this.multiplayerManager.isInMultiplayerGame()) {
-                            this.startButton.hide();
-                            this.multiplayerMenu.show();
-                        } else if (this.multiplayerManager.isInMultiplayerGame()) {
-                            // If we're in a multiplayer game and we're the host, start the game
-                            if (this.multiplayerManager.isHosting()) {
-                                console.log("Host starting multiplayer game");
-                                this.multiplayerManager.startGame();
-                                this.startButton.hide();
-                            } else {
-                                this.showMessage("Waiting for host to start the game...");
-                            }
-                        } else {
-                            // Start single player mode
-                            this.isGameStarted = true;
-                            // Reset scores when game starts
-                            this.playerScore = 0;
-                            this.aiScore = 0;
-                            this.playerScoreDisplay.updateScore(0);
-                            this.aiScoreDisplay.updateScore(0);
+                        // The press method now handles the cooldown
+                        console.log(`Attempting to press start button at ${Date.now()}`);
+                        const pressResult = this.startButton.press();
+                        console.log(`Start button press result: ${pressResult ? 'PRESSED' : 'IGNORED (cooldown)'}`);
+                        
+                        // Store which controller pressed the button
+                        if (pressResult) {
+                            this.lastButtonPressController = leftIsNewPress ? this.vrController.controllers[0] : this.vrController.controllers[1];
+                            this.lastButtonPressTime = Date.now();
                             
-                            // Add haptic feedback when pressing start
-                            const session = this.renderer.xr.getSession();
-                            if (session) {
-                                session.inputSources.forEach(inputSource => {
-                                    if (inputSource.handedness === 'right' && inputSource.gamepad?.hapticActuators?.[0]) {
-                                        // Strong, short pulse for button press
-                                        inputSource.gamepad.hapticActuators[0].pulse(1.0, 50);
+                            // Log button press time for debugging
+                            console.log(`VR start button pressed at ${this.lastButtonPressTime} by ${leftIsNewPress ? 'LEFT' : 'RIGHT'} controller`);
+                            
+                            // Schedule a delayed action to check for button release before showing menu
+                            setTimeout(() => {
+                                // Only proceed if the controller has been fully released
+                                if (this.vrController.hasBeenReleasedSince(this.lastButtonPressController, this.lastButtonPressTime)) {
+                                    console.log("Controller has been released since button press, safe to proceed");
+                                    
+                                    // Check if we're showing the multiplayer menu instead of starting
+                                    if (this.multiplayerManager.isConnected && !this.multiplayerManager.isInMultiplayerGame()) {
+                                        console.log('Showing multiplayer menu in VR');
+                                        this.startButton.hide();
+                                        this.multiplayerMenu.show();
+                                    } else if (this.multiplayerManager.isInMultiplayerGame()) {
+                                        // If we're in a multiplayer game and we're the host, start the game
+                                        console.log(`Multiplayer game status - isHosting: ${this.multiplayerManager.isHosting()}`);
+                                        if (this.multiplayerManager.isHosting()) {
+                                            console.log("Host starting multiplayer game");
+                                            this.multiplayerManager.startGame();
+                                            this.startButton.hide();
+                                        } else {
+                                            console.log("Player is waiting for host to start game");
+                                            this.showMessage("Waiting for host to start the game...");
+                                        }
+                                    } else {
+                                        console.log('Starting single player game in VR');
+                                        console.log(`Game state before starting: isGameStarted=${this.isGameStarted}, isGamePaused=${this.isGamePaused}`);
+                                        this.isGameStarted = true;
+                                        this.playerScore = 0;
+                                        this.aiScore = 0;
+                                        this.playerScoreDisplay.updateScore(0);
+                                        this.aiScoreDisplay.updateScore(0);
+                                        
+                                        this.ball.start();
+                                        this.timer.start();
+                                        if (this.soundManager) {
+                                            this.soundManager.startBackgroundMusic();
+                                        }
+                                        this.startButton.hide();
+                                        console.log(`Game state after starting: isGameStarted=${this.isGameStarted}, isGamePaused=${this.isGamePaused}`);
                                     }
-                                });
-                            }
-                            
-                            this.ball.start();
-                            this.timer.start();
-                            // Start background music
-                            if (this.soundManager) {
-                                this.soundManager.startBackgroundMusic();
-                            }
-                            this.startButton.hide();
+                                } else {
+                                    console.log("Controller has NOT been released since button press, waiting for release");
+                                }
+                            }, 300); // Wait for button animation to complete
                         }
                     }
                 } else {
+                    // Unhighlight when not intersecting
                     this.startButton.unhighlight();
                 }
             }
@@ -745,6 +787,44 @@ export class Game {
                 // Update the timer if the game is active
                 if (!this.isGamePaused) {
                     this.timer.update();
+                    
+                    // Update ball movement - add this missing logic
+                    const collision = this.ball.update(this.clock.getDelta(), this.playerPaddle, this.aiPaddle);
+                    
+                    // Handle collisions and scoring
+                    if (collision === 'player' || collision === 'ai') {
+                        // Play sound and trigger haptics for paddle hits
+                        if (this.soundManager) {
+                            this.soundManager.playPaddleHit();
+                        }
+                        this.triggerPaddleHaptics(0.7, 50);
+                    } else if (collision === 'player_score') {
+                        // AI scored
+                        this.aiScore++;
+                        this.aiScoreDisplay.updateScore(this.aiScore);
+                        if (this.soundManager) {
+                            this.soundManager.playScore();
+                        }
+                        // Start the ball again after short delay
+                        setTimeout(() => {
+                            if (this.isGameStarted && !this.isGamePaused) {
+                                this.ball.start();
+                            }
+                        }, 1000);
+                    } else if (collision === 'ai_score') {
+                        // Player scored
+                        this.playerScore++;
+                        this.playerScoreDisplay.updateScore(this.playerScore);
+                        if (this.soundManager) {
+                            this.soundManager.playScore();
+                        }
+                        // Start the ball again after short delay
+                        setTimeout(() => {
+                            if (this.isGameStarted && !this.isGamePaused) {
+                                this.ball.start();
+                            }
+                        }, 1000);
+                    }
                     
                     // In multiplayer mode, send paddle position to the other player
                     if (this.isMultiplayer && this.multiplayerManager) {
@@ -760,255 +840,6 @@ export class Game {
                         }
                     }
                 }
-                
-                // In single player or if host in multiplayer, use AI paddle
-                if (!this.isMultiplayer || this.isLocalPlayer) {
-                    this.aiPaddle.updateAI(this.ball.getBall());
-                }
-                
-                const collision = this.ball.update(delta, this.playerPaddle.getPaddle(), this.aiPaddle.getPaddle());
-                
-                // Update music speed based on ball speed
-                if (this.isGameStarted && this.ball) {
-                    const ballSpeed = Math.sqrt(
-                        this.ball.ballVelocity.x * this.ball.ballVelocity.x + 
-                        this.ball.ballVelocity.z * this.ball.ballVelocity.z
-                    );
-                    // Scale down the speed factor to make acceleration more gradual
-                    const normalizedSpeed = 1.0 + (ballSpeed / this.ball.initialSpeed - 1.0) * 0.3; 
-                    if (this.soundManager) {
-                        this.soundManager.updateMusicSpeed(normalizedSpeed);
-                    }
-                }
-
-                // Update timer
-                if (this.timer && this.timer.update()) {
-                    // Timer has finished
-                    this.isGameStarted = false;
-                    if (this.soundManager) {
-                        this.soundManager.stopBackgroundMusic();
-                    }
-                    this.startButton.show();
-                    this.ball.reset();
-                }
-
-                // Handle collisions
-                if (collision === 'player') {
-                    this.soundManager.playPaddleHit();
-                    
-                    // Send collision event in multiplayer mode
-                    if (this.isMultiplayer && this.isLocalPlayer) {
-                        this.multiplayerManager.sendCollisionEvent('paddle', this.ball.getBall().position);
-                    }
-                    
-                    const session = this.renderer.xr.getSession();
-                    if (session) {
-                        session.inputSources.forEach(inputSource => {
-                            if (inputSource.handedness === 'right' && inputSource.gamepad?.hapticActuators?.[0]) {
-                                inputSource.gamepad.hapticActuators[0].pulse(1.0, 100);
-                            }
-                        });
-                    }
-                } else if (collision === 'ai') {
-                    this.soundManager.playAIHit();
-                    
-                    // Send collision event in multiplayer mode
-                    if (this.isMultiplayer && !this.isLocalPlayer) {
-                        this.multiplayerManager.sendCollisionEvent('paddle', this.ball.getBall().position);
-                    }
-                    
-                    const session = this.renderer.xr.getSession();
-                    if (session) {
-                        session.inputSources.forEach(inputSource => {
-                            if (inputSource.handedness === 'right' && inputSource.gamepad?.hapticActuators?.[0]) {
-                                inputSource.gamepad.hapticActuators[0].pulse(0.5, 50);
-                            }
-                        });
-                    }
-                } else if (collision === 'player_score' || collision === 'ai_score') {
-                    // Stop music when ball goes out of bounds
-                    this.soundManager.stopBackgroundMusic();
-                    
-                    if (collision === 'player_score') {
-                        this.playerScore++;
-                        this.playerScoreDisplay.updateScore(this.playerScore);
-                        this.environment.flashRail('right');
-                        
-                        // Update score in multiplayer mode
-                        if (this.isMultiplayer && this.isLocalPlayer) {
-                            if (this.isLocalPlayer) {
-                                this.multiplayerManager.updateScore(this.playerScore, this.aiScore);
-                            } else {
-                                this.multiplayerManager.updateScore(this.aiScore, this.playerScore);
-                            }
-                        }
-                    } else {
-                        this.aiScore++;
-                        this.aiScoreDisplay.updateScore(this.aiScore);
-                        this.environment.flashRail('left');
-                        
-                        // Update score in multiplayer mode
-                        if (this.isMultiplayer && this.isLocalPlayer) {
-                            if (this.isLocalPlayer) {
-                                this.multiplayerManager.updateScore(this.playerScore, this.aiScore);
-                            } else {
-                                this.multiplayerManager.updateScore(this.aiScore, this.playerScore);
-                            }
-                        }
-                    }
-
-                    // Play out of bounds sound and trigger haptics
-                    if (this.soundManager) {
-                        this.soundManager.playLose();
-                    }
-                    
-                    // Send collision event in multiplayer mode
-                    if (this.isMultiplayer && this.isLocalPlayer) {
-                        this.multiplayerManager.sendCollisionEvent('score', this.ball.getBall().position);
-                    }
-                    
-                    const session = this.renderer.xr.getSession();
-                    if (session) {
-                        session.inputSources.forEach(inputSource => {
-                            if (inputSource.handedness === 'right' && inputSource.gamepad?.hapticActuators?.[0]) {
-                                inputSource.gamepad.hapticActuators[0].pulse(0.7, 100);
-                            }
-                        });
-                    }
-                    
-                    // Restart ball and music after a short delay
-                    setTimeout(() => {
-                        if (this.isGameStarted) {
-                            // Only host restarts the ball in multiplayer
-                            if (!this.isMultiplayer || this.isLocalPlayer) {
-                                this.ball.start();
-                            }
-                            if (this.soundManager) {
-                                this.soundManager.startBackgroundMusic();
-                            }
-                        }
-                    }, 1000);
-                }
-
-                // Handle wall collisions for audio
-                const currentBallX = this.ball.getBall().position.x;
-                const wallHitThreshold = 1.39; // Adjust based on your wall positioning
-                
-                // Check for wall collision and play sound
-                if ((Math.abs(prevBallX) < wallHitThreshold && Math.abs(currentBallX) >= wallHitThreshold) ||
-                    (Math.abs(prevBallX) >= wallHitThreshold && Math.abs(currentBallX) < wallHitThreshold)) {
-                    this.soundManager.playWallHit();
-                    
-                    // Send collision event in multiplayer mode
-                    if (this.isMultiplayer && this.isLocalPlayer) {
-                        this.multiplayerManager.sendCollisionEvent('wall', this.ball.getBall().position);
-                    }
-                    
-                    // Provide subtle haptic feedback for wall hits
-                    const session = this.renderer.xr.getSession();
-                    if (session) {
-                        session.inputSources.forEach(inputSource => {
-                            if (inputSource.gamepad?.hapticActuators?.[0]) {
-                                inputSource.gamepad.hapticActuators[0].pulse(0.3, 30);
-                            }
-                        });
-                    }
-                }
-
-                // Paddle-ball collision detection
-                if (this.ball.checkPaddleCollision(this.playerPaddle)) {
-                    if (this.multiplayerManager.isInMultiplayerGame() && !this.multiplayerManager.isHosting()) {
-                        // If we're a guest, send the collision event
-                        this.multiplayerManager.sendCollisionEvent('paddle', this.ball.getBall().position.clone());
-                    }
-                    if (this.soundManager) {
-                        this.soundManager.playPaddleHit();
-                    }
-                }
-
-                // AI paddle-ball collision detection
-                if (this.ball.checkPaddleCollision(this.aiPaddle)) {
-                    if (this.multiplayerManager.isInMultiplayerGame() && this.multiplayerManager.isHosting()) {
-                        // If we're the host, send the collision event
-                        this.multiplayerManager.sendCollisionEvent('paddle', this.ball.getBall().position.clone());
-                    }
-                    if (this.soundManager) {
-                        this.soundManager.playAIHit();
-                    }
-                }
-
-                // Check if ball is out of bounds and reset if needed
-                const outOfBounds = this.ball.checkOutOfBounds();
-                if (outOfBounds) {
-                    this.isGameStarted = false;
-                    if (this.soundManager) {
-                        this.soundManager.stopBackgroundMusic();
-                    }
-                    
-                    // Reset the ball
-                    this.ball.reset();
-                    
-                    // Update score based on which side the ball went out
-                    if (outOfBounds === 'player_score') {
-                        this.playerScore++;
-                        this.playerScoreDisplay.updateScore(this.playerScore);
-                        this.environment.flashRail('right');
-                        
-                        // Update score in multiplayer mode
-                        if (this.isMultiplayer && this.isLocalPlayer) {
-                            if (this.isLocalPlayer) {
-                                this.multiplayerManager.updateScore(this.playerScore, this.aiScore);
-                            } else {
-                                this.multiplayerManager.updateScore(this.aiScore, this.playerScore);
-                            }
-                        }
-                    } else {
-                        this.aiScore++;
-                        this.aiScoreDisplay.updateScore(this.aiScore);
-                        this.environment.flashRail('left');
-                        
-                        // Update score in multiplayer mode
-                        if (this.isMultiplayer && this.isLocalPlayer) {
-                            if (this.isLocalPlayer) {
-                                this.multiplayerManager.updateScore(this.playerScore, this.aiScore);
-                            } else {
-                                this.multiplayerManager.updateScore(this.aiScore, this.playerScore);
-                            }
-                        }
-                    }
-
-                    // Play out of bounds sound and trigger haptics
-                    if (this.soundManager) {
-                        this.soundManager.playLose();
-                    }
-                    
-                    // Send collision event in multiplayer mode
-                    if (this.isMultiplayer && this.isLocalPlayer) {
-                        this.multiplayerManager.sendCollisionEvent('score', this.ball.getBall().position);
-                    }
-                    
-                    const session = this.renderer.xr.getSession();
-                    if (session) {
-                        session.inputSources.forEach(inputSource => {
-                            if (inputSource.handedness === 'right' && inputSource.gamepad?.hapticActuators?.[0]) {
-                                inputSource.gamepad.hapticActuators[0].pulse(0.7, 100);
-                            }
-                        });
-                    }
-                    
-                    // Restart ball and music after a short delay
-                    setTimeout(() => {
-                        if (this.isGameStarted) {
-                            // Only host restarts the ball in multiplayer
-                            if (!this.isMultiplayer || this.isLocalPlayer) {
-                                this.ball.start();
-                            }
-                            if (this.soundManager) {
-                                this.soundManager.startBackgroundMusic();
-                            }
-                        }
-                    }, 1000);
-                }
             }
 
             this.renderer.render(this.scene, this.camera);
@@ -1017,6 +848,8 @@ export class Game {
 
     // Add method to reset the game state
     resetGame() {
+        console.log("Resetting game state...");
+        
         // Reset game state flags
         this.isGameStarted = false;
         this.isGamePaused = false;
@@ -1038,15 +871,31 @@ export class Game {
         
         // Reset paddle positions
         if (this.playerPaddle && this.playerPaddle.getPaddle()) {
-            this.playerPaddle.getPaddle().position.z = -0.1;
+            console.log("Resetting player paddle position to z=-0.1");
+            this.playerPaddle.getPaddle().position.set(0, 1.0, -0.1);
         }
         
         if (this.aiPaddle && this.aiPaddle.getPaddle()) {
-            this.aiPaddle.getPaddle().position.z = -1.9;
+            console.log("Resetting AI paddle position to z=-1.9");
+            this.aiPaddle.getPaddle().position.set(0, 1.0, -1.9);
         }
         
-        // Show start button
-        if (this.startButton) this.startButton.show();
+        // Hide multiplayer menu if visible
+        if (this.multiplayerMenu && this.multiplayerMenu.isVisible) {
+            this.multiplayerMenu.hide();
+        }
+        
+        // Show and reset start button
+        if (this.startButton) {
+            console.log("Resetting and showing start button");
+            this.startButton.reset();
+            this.startButton.show();
+        }
+        
+        // Reset sound
+        if (this.soundManager) {
+            this.soundManager.stopBackgroundMusic();
+        }
         
         console.log("Game reset completed");
     }

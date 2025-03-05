@@ -32,8 +32,10 @@ export class Paddle {
         });
         this.paddle = new THREE.Mesh(paddleGeometry, paddleMaterial);
         
-        // Position player paddle at near end (-0.1) and AI/opponent paddle at far end (-1.9)
-        this.paddle.position.set(0, 0.9, this.isAI ? -1.9 : -0.1);
+        // Use fixed Z positions to ensure paddles are always on opposite sides
+        // AI paddle at far end (z = -1.9), player paddle at near end (z = -0.1)
+        const zPosition = this.isAI ? -1.9 : -0.1;
+        this.paddle.position.set(0, 0.9, zPosition);
 
         // Add glow effect
         const glowGeometry = new THREE.BoxGeometry(0.31, 0.21, this.depth + 0.01);
@@ -75,7 +77,9 @@ export class Paddle {
     }
 
     setPosition(position) {
-        this.paddle.position.copy(position);
+        // Preserve Z position when updating paddle position
+        const currentZ = this.paddle.position.z;
+        this.paddle.position.set(position.x, position.y, currentZ);
     }
 
     lerp(start, end, t) {

@@ -88,6 +88,8 @@ export class MultiplayerManager {
                 // Show the start button for the host
                 if (this.game.startButton) {
                     this.game.startButton.show();
+                    // Change button text from "START" to "PLAY"
+                    this.game.startButton.updateButtonText('PLAY');
                 }
             } else {
                 this.opponentId = data.hostId;
@@ -121,7 +123,10 @@ export class MultiplayerManager {
 
         // Receive remote paddle position updates
         this.socket.on('paddlePositionUpdated', (data) => {
-            this.game.updateRemotePaddlePosition(data.position, data.isHost);
+            console.log(`Received paddle position: x=${data.x.toFixed(2)}, y=${data.y.toFixed(2)}, z=${data.z.toFixed(2)}, isHost=${data.isHost}`);
+            // Create position object from the received data
+            const position = { x: data.x, y: data.y, z: data.z };
+            this.game.updateRemotePaddlePosition(position, data.isHost);
         });
 
         // Receive ball position updates (guest only)
@@ -207,12 +212,16 @@ export class MultiplayerManager {
     }
 
     // Send paddle position update
-    updatePaddlePosition(position) {
-        if (!this.isMultiplayerActive || !this.roomId) return;
+    updatePaddlePosition(paddle) {
+        if (!this.socket || !this.socket.connected) return;
+        
+        const paddlePos = paddle.getPaddle().position;
+        console.log(`Sending paddle position: x=${paddlePos.x.toFixed(2)}, y=${paddlePos.y.toFixed(2)}, z=${paddlePos.z.toFixed(2)}`);
         
         this.socket.emit('updatePaddlePosition', {
-            roomId: this.roomId,
-            position,
+            x: paddlePos.x,
+            y: paddlePos.y,
+            z: paddlePos.z,
             isHost: this.isHost
         });
     }

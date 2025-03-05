@@ -147,9 +147,13 @@ io.on('connection', (socket) => {
     
     // Update paddle position
     socket.on('updatePaddlePosition', (data) => {
-        const { roomId, position, isHost } = data;
+        const { x, y, z, isHost } = data;
+        const position = { x, y, z };
         
-        if (gameRooms[roomId]) {
+        // Find the room this socket is in
+        const roomId = [...socket.rooms].find(room => room !== socket.id && gameRooms[room]);
+        
+        if (roomId && gameRooms[roomId]) {
             if (isHost) {
                 gameRooms[roomId].gameData.hostPaddlePosition = position;
             } else {
@@ -158,7 +162,7 @@ io.on('connection', (socket) => {
             
             // Broadcast to other player in the room
             socket.to(roomId).emit('paddlePositionUpdated', {
-                position,
+                x, y, z,
                 isHost
             });
         }

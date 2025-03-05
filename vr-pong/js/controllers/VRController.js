@@ -30,22 +30,66 @@ export class VRController {
     setupControllers() {
         // Left Controller (0)
         this.controllers[0] = this.renderer.xr.getController(0);
+        this.controllers[0].userData.isSelecting = false;
+        this.controllers[0].userData.selectStartTime = 0;
+        this.controllers[0].userData.isNewPress = false;
+        this.controllers[0].userData.lastSelectEndTime = 0; // Track when the button was last released
+        
         this.controllers[0].addEventListener('selectstart', () => {
+            const now = Date.now();
+            this.controllers[0].userData.selectStartTime = now;
             this.controllers[0].userData.isSelecting = true;
+            this.controllers[0].userData.isNewPress = true;
+            
+            console.log(`Left controller: selectstart at ${now}`);
+            
+            // Reset isNewPress flag after a short delay to prevent multiple rapid triggers
+            setTimeout(() => {
+                this.controllers[0].userData.isNewPress = false;
+            }, 100);
         });
+        
         this.controllers[0].addEventListener('selectend', () => {
+            const now = Date.now();
             this.controllers[0].userData.isSelecting = false;
+            this.controllers[0].userData.isNewPress = false;
+            this.controllers[0].userData.lastSelectEndTime = now;
+            
+            console.log(`Left controller: selectend at ${now}`);
         });
+        
         this.playerGroup.add(this.controllers[0]);
 
         // Right Controller (1)
         this.controllers[1] = this.renderer.xr.getController(1);
+        this.controllers[1].userData.isSelecting = false;
+        this.controllers[1].userData.selectStartTime = 0;
+        this.controllers[1].userData.isNewPress = false;
+        this.controllers[1].userData.lastSelectEndTime = 0; // Track when the button was last released
+        
         this.controllers[1].addEventListener('selectstart', () => {
+            const now = Date.now();
+            this.controllers[1].userData.selectStartTime = now;
             this.controllers[1].userData.isSelecting = true;
+            this.controllers[1].userData.isNewPress = true;
+            
+            console.log(`Right controller: selectstart at ${now}`);
+            
+            // Reset isNewPress flag after a short delay to prevent multiple rapid triggers
+            setTimeout(() => {
+                this.controllers[1].userData.isNewPress = false;
+            }, 100);
         });
+        
         this.controllers[1].addEventListener('selectend', () => {
+            const now = Date.now();
             this.controllers[1].userData.isSelecting = false;
+            this.controllers[1].userData.isNewPress = false;
+            this.controllers[1].userData.lastSelectEndTime = now;
+            
+            console.log(`Right controller: selectend at ${now}`);
         });
+        
         this.playerGroup.add(this.controllers[1]);
 
         // Add controller models
@@ -64,6 +108,11 @@ export class VRController {
         // Store the active controller for paddle control
         this.activeController = this.controllers[1]; // Right controller by default
         this.activeSide = 'right';
+    }
+
+    // Checks if the controller has been released since a specific time
+    hasBeenReleasedSince(controller, timestamp) {
+        return controller.userData.lastSelectEndTime > timestamp;
     }
 
     updatePaddlePosition(paddle, controllerPosition) {

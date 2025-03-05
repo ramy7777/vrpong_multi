@@ -22,6 +22,10 @@ export class MultiplayerMenu {
         this.lastButtonPressTime = 0;
         this.buttonCooldown = 800; // Increased from 500ms to 800ms to prevent accidental double clicks
         
+        // Add a buffer time when menu first appears to prevent accidental button presses
+        this.showTime = 0;
+        this.showDelay = 1000; // 1 second delay after showing before accepting input
+        
         // Button properties (following standardized styling)
         this.buttonColors = {
             base: 0x5a5a5a,
@@ -154,6 +158,13 @@ export class MultiplayerMenu {
     checkIntersection(controller) {
         if (!this.isVisible) return null;
         
+        // Skip intersection checks if we're still in the initial delay period
+        const now = Date.now();
+        if (now - this.showTime < this.showDelay) {
+            // Still in delay period, don't process interactions yet
+            return null;
+        }
+        
         const tempMatrix = new THREE.Matrix4();
         tempMatrix.identity().extractRotation(controller.matrixWorld);
         
@@ -210,10 +221,18 @@ export class MultiplayerMenu {
         
         // Implement debounce to prevent rapid repeated button presses
         const now = Date.now();
-        if (now - this.lastButtonPressTime < this.buttonCooldown) {
-            console.log(`Button press ignored (cooldown active): ${now - this.lastButtonPressTime}ms since last press`);
+        
+        // Skip button press if we're still in the initial delay period
+        if (now - this.showTime < this.showDelay) {
+            console.log(`MultiplayerMenu: Button ${buttonKey} press ignored (still in show delay): ${now - this.showTime}ms since menu shown. Menu shown at: ${this.showTime}, Current time: ${now}, Delay period: ${this.showDelay}ms`);
             return;
         }
+        
+        if (now - this.lastButtonPressTime < this.buttonCooldown) {
+            console.log(`MultiplayerMenu: Button ${buttonKey} press ignored (cooldown active): ${now - this.lastButtonPressTime}ms since last press. Last press: ${this.lastButtonPressTime}, Current time: ${now}, Cooldown: ${this.buttonCooldown}ms`);
+            return;
+        }
+        console.log(`MultiplayerMenu: Button ${buttonKey} pressed successfully at ${now}`);
         this.lastButtonPressTime = now;
         
         const buttonMesh = this.buttons[buttonKey].children[0];
@@ -225,6 +244,7 @@ export class MultiplayerMenu {
         this.buttons[buttonKey].position.z += 0.01;
         
         // Execute callback
+        console.log(`MultiplayerMenu: Executing callback for button: ${buttonKey}`);
         if (buttonKey === 'singleplayer' && this.callbacks.onSinglePlayer) {
             this.callbacks.onSinglePlayer();
         } else if (buttonKey === 'host' && this.callbacks.onHost) {
@@ -236,10 +256,12 @@ export class MultiplayerMenu {
         }
         
         // Reset button state after 300ms (matching the transition duration)
+        console.log(`MultiplayerMenu: Setting timeout to reset button ${buttonKey} in 300ms`);
         setTimeout(() => {
             if (this.buttons[buttonKey]) {
                 this.buttons[buttonKey].position.z -= 0.01;
                 this.unhighlightButton(buttonKey);
+                console.log(`MultiplayerMenu: Button ${buttonKey} reset completed`);
             }
         }, 300);
     }
@@ -251,6 +273,8 @@ export class MultiplayerMenu {
     show() {
         this.menuGroup.visible = true;
         this.isVisible = true;
+        this.showTime = Date.now();
+        console.log(`MultiplayerMenu: Shown at ${this.showTime}, input will be enabled after ${this.showDelay}ms`);
     }
     
     hide() {
