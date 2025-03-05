@@ -5,12 +5,14 @@ export class MultiplayerMenu {
         this.scene = scene;
         this.menuGroup = new THREE.Group();
         this.buttons = {
+            singleplayer: null,
             host: null,
             join: null,
             back: null
         };
         this.isVisible = false;
         this.callbacks = {
+            onSinglePlayer: null,
             onHost: null,
             onJoin: null,
             onBack: null
@@ -18,7 +20,7 @@ export class MultiplayerMenu {
         
         // Add debounce mechanism to prevent multiple activations
         this.lastButtonPressTime = 0;
-        this.buttonCooldown = 500; // ms
+        this.buttonCooldown = 800; // Increased from 500ms to 800ms to prevent accidental double clicks
         
         // Button properties (following standardized styling)
         this.buttonColors = {
@@ -38,7 +40,7 @@ export class MultiplayerMenu {
     
     createMenu() {
         // Create background panel
-        const panelGeometry = new THREE.BoxGeometry(1.2, 0.8, 0.02);
+        const panelGeometry = new THREE.BoxGeometry(1.2, 1.0, 0.02); // Increased height to accommodate the new button
         const panelMaterial = new THREE.MeshStandardMaterial({
             color: 0x000033,
             metalness: 0.8,
@@ -60,7 +62,7 @@ export class MultiplayerMenu {
         titleContext.font = 'bold 64px Arial';
         titleContext.textAlign = 'center';
         titleContext.textBaseline = 'middle';
-        titleContext.fillText('MULTIPLAYER', titleCanvas.width / 2, titleCanvas.height / 2);
+        titleContext.fillText('GAME MODE', titleCanvas.width / 2, titleCanvas.height / 2);
         
         const titleTexture = new THREE.CanvasTexture(titleCanvas);
         const titleMaterial = new THREE.MeshBasicMaterial({
@@ -70,19 +72,23 @@ export class MultiplayerMenu {
         
         const titleGeometry = new THREE.PlaneGeometry(0.8, 0.2);
         const titleMesh = new THREE.Mesh(titleGeometry, titleMaterial);
-        titleMesh.position.set(0, 0.25, 0.02);
+        titleMesh.position.set(0, 0.35, 0.02);
         this.menuGroup.add(titleMesh);
         
+        // Create Single Player button
+        this.buttons.singleplayer = this.createButton('SINGLE PLAYER', 0, 0.15, 0.02);
+        this.menuGroup.add(this.buttons.singleplayer);
+        
         // Create Host Game button
-        this.buttons.host = this.createButton('HOST GAME', 0, 0.05, 0.02);
+        this.buttons.host = this.createButton('HOST GAME', 0, -0.05, 0.02);
         this.menuGroup.add(this.buttons.host);
         
         // Create Quick Join button
-        this.buttons.join = this.createButton('QUICK JOIN', 0, -0.15, 0.02);
+        this.buttons.join = this.createButton('QUICK JOIN', 0, -0.25, 0.02);
         this.menuGroup.add(this.buttons.join);
         
         // Create Back button
-        this.buttons.back = this.createButton('BACK', 0, -0.35, 0.02);
+        this.buttons.back = this.createButton('BACK', 0, -0.45, 0.02);
         this.menuGroup.add(this.buttons.back);
         
         // Position the menu in front of the player
@@ -205,7 +211,7 @@ export class MultiplayerMenu {
         // Implement debounce to prevent rapid repeated button presses
         const now = Date.now();
         if (now - this.lastButtonPressTime < this.buttonCooldown) {
-            console.log(`Button press ignored (cooldown active)`);
+            console.log(`Button press ignored (cooldown active): ${now - this.lastButtonPressTime}ms since last press`);
             return;
         }
         this.lastButtonPressTime = now;
@@ -219,7 +225,9 @@ export class MultiplayerMenu {
         this.buttons[buttonKey].position.z += 0.01;
         
         // Execute callback
-        if (buttonKey === 'host' && this.callbacks.onHost) {
+        if (buttonKey === 'singleplayer' && this.callbacks.onSinglePlayer) {
+            this.callbacks.onSinglePlayer();
+        } else if (buttonKey === 'host' && this.callbacks.onHost) {
             this.callbacks.onHost();
         } else if (buttonKey === 'join' && this.callbacks.onJoin) {
             this.callbacks.onJoin();

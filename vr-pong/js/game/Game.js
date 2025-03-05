@@ -96,6 +96,36 @@ export class Game {
         
         // Set up the callbacks for the multiplayer menu buttons
         this.multiplayerMenu.setCallbacks({
+            onSinglePlayer: () => {
+                console.log("Starting single player game...");
+                this.multiplayerMenu.hide();
+                
+                // Reset existing game state
+                this.resetGame();
+                
+                // Start a single player game against AI
+                this.isMultiplayer = false;
+                this.isGameStarted = true;
+                
+                // Reset scores
+                this.playerScore = 0;
+                this.aiScore = 0;
+                this.playerScoreDisplay.updateScore(0);
+                this.aiScoreDisplay.updateScore(0);
+                
+                // Make sure the AI paddle is positioned correctly
+                this.aiPaddle.getPaddle().position.z = -1.9;
+                this.playerPaddle.getPaddle().position.z = -0.1;
+                
+                // Start game directly
+                this.ball.start();
+                this.timer.start();
+                if (this.soundManager) {
+                    this.soundManager.startBackgroundMusic();
+                }
+                
+                this.showMessage('Single Player Game Started!');
+            },
             onHost: () => {
                 if (this.multiplayerManager.isConnected) {
                     console.log("Attempting to host a game...");
@@ -240,11 +270,14 @@ export class Game {
                 
                 // Check multiplayer menu button intersections
                 if (this.multiplayerMenu.isVisible) {
+                    const singleplayerIntersects = raycaster.intersectObject(this.multiplayerMenu.buttons.singleplayer, true);
                     const hostIntersects = raycaster.intersectObject(this.multiplayerMenu.buttons.host, true);
                     const joinIntersects = raycaster.intersectObject(this.multiplayerMenu.buttons.join, true);
                     const backIntersects = raycaster.intersectObject(this.multiplayerMenu.buttons.back, true);
                     
-                    if (hostIntersects.length > 0) {
+                    if (singleplayerIntersects.length > 0) {
+                        this.multiplayerMenu.pressButton('singleplayer');
+                    } else if (hostIntersects.length > 0) {
                         this.multiplayerMenu.pressButton('host');
                     } else if (joinIntersects.length > 0) {
                         this.multiplayerMenu.pressButton('join');
@@ -452,12 +485,24 @@ export class Game {
         this.startButton.hide();
         this.multiplayerMenu.hide();
         
-        // Position paddles correctly for multiplayer
-        // In multiplayer, player paddle is always on near side, opponent on far side
-        // For host: playerPaddle near, aiPaddle far
-        // For guest: playerPaddle near, aiPaddle far (same positioning but different controls)
-        this.playerPaddle.getPaddle().position.z = -0.1; // Near side of table
-        this.aiPaddle.getPaddle().position.z = -1.9;     // Far side of table
+        // IMPORTANT: Force paddle positions to correct sides of table
+        // Recreate paddles to ensure they are positioned correctly
+        if (this.playerPaddle.getPaddle()) {
+            this.scene.remove(this.playerPaddle.getPaddle());
+        }
+        if (this.aiPaddle.getPaddle()) {
+            this.scene.remove(this.aiPaddle.getPaddle());
+        }
+        
+        // Create new paddles with correct initial positions
+        this.playerPaddle = new Paddle(this.scene, false);
+        this.aiPaddle = new Paddle(this.scene, true);
+        
+        // Double-check positions are correct
+        this.playerPaddle.getPaddle().position.z = -0.1; // Near side
+        this.aiPaddle.getPaddle().position.z = -1.9;     // Far side
+        
+        console.log(`Paddle positions set - Player: ${this.playerPaddle.getPaddle().position.z}, AI: ${this.aiPaddle.getPaddle().position.z}`);
         
         // Show a message
         this.showMessage('Game started!', 3000);
@@ -511,7 +556,21 @@ export class Game {
             (this.isLocalPlayer ? this.playerPaddle : this.aiPaddle) :
             (this.isLocalPlayer ? this.aiPaddle : this.playerPaddle);
         
-        targetPaddle.setPosition(position);
+        console.log(`Remote paddle update: ${isHostPaddle ? 'Host' : 'Guest'} paddle position before: ${JSON.stringify({
+            x: targetPaddle.getPaddle().position.x,
+            y: targetPaddle.getPaddle().position.y,
+            z: targetPaddle.getPaddle().position.z
+        })}`);
+        
+        // Only update X and Y positions, preserve Z position
+        const currentPos = targetPaddle.getPaddle().position.clone();
+        targetPaddle.getPaddle().position.set(position.x, position.y, currentPos.z);
+        
+        console.log(`Remote paddle update: ${isHostPaddle ? 'Host' : 'Guest'} paddle position after: ${JSON.stringify({
+            x: targetPaddle.getPaddle().position.x,
+            y: targetPaddle.getPaddle().position.y,
+            z: targetPaddle.getPaddle().position.z
+        })}`);
     }
 
     updateRemoteBallPosition(position, velocity) {
@@ -603,7 +662,7 @@ export class Game {
                 const rightIntersects = this.multiplayerMenu.checkIntersection(this.vrController.controllers[1]);
                 
                 // Unhighlight all buttons first
-                ['host', 'join', 'back'].forEach(buttonKey => {
+                ['singleplayer', 'host', 'join', 'back'].forEach(buttonKey => {
                     this.multiplayerMenu.unhighlightButton(buttonKey);
                 });
                 
@@ -683,17 +742,22 @@ export class Game {
             }
 
             if (this.isGameStarted) {
-                // Update paddle position in network if in multiplayer mode
-                if (this.isMultiplayer) {
-                    // Send paddle position to other player
-                    this.multiplayerManager.updatePaddlePosition(this.playerPaddle.getPosition());
+                // Update the timer if the game is active
+                if (!this.isGamePaused) {
+                    this.timer.update();
                     
-                    // If host, also send ball position updates
-                    if (this.isLocalPlayer) {
-                        this.multiplayerManager.updateBallPosition(
-                            this.ball.getBall().position,
-                            this.ball.ballVelocity
-                        );
+                    // In multiplayer mode, send paddle position to the other player
+                    if (this.isMultiplayer && this.multiplayerManager) {
+                        // Send our paddle position
+                        this.multiplayerManager.updatePaddlePosition(this.playerPaddle);
+                        
+                        // If we're the host, send ball position too
+                        if (this.isLocalPlayer) {
+                            this.multiplayerManager.updateBallPosition(
+                                this.ball.getBall().position,
+                                this.ball.ballVelocity
+                            );
+                        }
                     }
                 }
                 
@@ -949,5 +1013,41 @@ export class Game {
 
             this.renderer.render(this.scene, this.camera);
         });
+    }
+
+    // Add method to reset the game state
+    resetGame() {
+        // Reset game state flags
+        this.isGameStarted = false;
+        this.isGamePaused = false;
+        this.isMultiplayer = false;
+        
+        // Reset scores
+        this.playerScore = 0;
+        this.aiScore = 0;
+        
+        // Update score displays
+        if (this.playerScoreDisplay) this.playerScoreDisplay.updateScore(0);
+        if (this.aiScoreDisplay) this.aiScoreDisplay.updateScore(0);
+        
+        // Reset ball position
+        if (this.ball) this.ball.reset();
+        
+        // Reset timer
+        if (this.timer) this.timer.reset();
+        
+        // Reset paddle positions
+        if (this.playerPaddle && this.playerPaddle.getPaddle()) {
+            this.playerPaddle.getPaddle().position.z = -0.1;
+        }
+        
+        if (this.aiPaddle && this.aiPaddle.getPaddle()) {
+            this.aiPaddle.getPaddle().position.z = -1.9;
+        }
+        
+        // Show start button
+        if (this.startButton) this.startButton.show();
+        
+        console.log("Game reset completed");
     }
 }
