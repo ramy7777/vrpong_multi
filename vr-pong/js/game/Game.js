@@ -826,6 +826,12 @@ export class Game {
                         }, 1000);
                     }
                     
+                    // Update AI paddle for single player mode
+                    if (!this.isMultiplayer && this.aiPaddle && this.ball) {
+                        console.log("Updating AI paddle position to track ball");
+                        this.aiPaddle.updateAI(this.ball.getBall());
+                    }
+                    
                     // In multiplayer mode, send paddle position to the other player
                     if (this.isMultiplayer && this.multiplayerManager) {
                         // Send our paddle position
