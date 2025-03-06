@@ -12,9 +12,17 @@ export class MultiplayerManager {
             
             // Try to get the server address, defaulting to localhost if the page is served locally
             const protocol = window.location.protocol === 'https:' ? 'https://' : 'http://';
-            const host = window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost' 
-                ? 'localhost:8443' 
-                : window.location.hostname; // Remove the hardcoded port for Render.com
+            const isLocalhost = window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost';
+            const isLocalNetwork = /^192\.168\.\d+\.\d+$/.test(window.location.hostname);
+            
+            let host;
+            if (isLocalhost || isLocalNetwork) {
+                // For localhost or local network (192.168.x.x), include the port
+                host = `${window.location.hostname}:8443`;
+            } else {
+                // For Render.com deployment
+                host = window.location.hostname;
+            }
                 
             console.log(`Connecting to server at ${protocol}${host}`);
             
@@ -123,7 +131,9 @@ export class MultiplayerManager {
 
         // Receive remote paddle position updates
         this.socket.on('paddlePositionUpdated', (data) => {
-            console.log(`Received paddle position: x=${data.x.toFixed(2)}, y=${data.y.toFixed(2)}, z=${data.z.toFixed(2)}, isHost=${data.isHost}, paddleIndex=${data.paddleIndex}`);
+            // Removed paddle position log
+            // console.log(`Received paddle position: x=${data.x.toFixed(2)}, y=${data.y.toFixed(2)}, z=${data.z.toFixed(2)}, isHost=${data.isHost}, paddleIndex=${data.paddleIndex}`);
+            
             // Create position object from the received data
             const position = { x: data.x, y: data.y, z: data.z };
             
@@ -162,7 +172,8 @@ export class MultiplayerManager {
 
         // New listener for paddle ownership claims
         this.socket.on('paddleOwnershipUpdated', (data) => {
-            console.log(`Received paddle ownership update: Paddle ${data.paddleIndex} claimed by ${data.isHost ? 'Host' : 'Guest'}`);
+            // Removed paddle ownership log
+            // console.log(`Received paddle ownership update: Paddle ${data.paddleIndex} claimed by ${data.isHost ? 'Host' : 'Guest'}`);
             this.game.updateRemotePaddleOwnership(data.paddleIndex, data.ownerId, data.isHost);
         });
     }

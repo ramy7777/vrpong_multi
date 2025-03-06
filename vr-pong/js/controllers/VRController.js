@@ -46,7 +46,7 @@ export class VRController {
             // Reset isNewPress flag after a short delay to prevent multiple rapid triggers
             setTimeout(() => {
                 this.controllers[0].userData.isNewPress = false;
-            }, 100);
+            }, 300);
         });
         
         this.controllers[0].addEventListener('selectend', () => {
@@ -78,7 +78,7 @@ export class VRController {
             // Reset isNewPress flag after a short delay to prevent multiple rapid triggers
             setTimeout(() => {
                 this.controllers[1].userData.isNewPress = false;
-            }, 100);
+            }, 300);
         });
         
         this.controllers[1].addEventListener('selectend', () => {

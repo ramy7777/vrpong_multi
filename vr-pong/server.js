@@ -220,8 +220,6 @@ io.on('connection', (socket) => {
                 isHost: isHost
             };
             
-            console.log(`Paddle ${paddleIndex} claimed by ${isHost ? 'Host' : 'Guest'} in room ${roomId}`);
-            
             // Broadcast to other player in the room
             socket.to(roomId).emit('paddleOwnershipUpdated', {
                 paddleIndex,

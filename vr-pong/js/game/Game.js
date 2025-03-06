@@ -620,7 +620,7 @@ export class Game {
             const currentPos = targetPaddle.getPaddle().position.clone();
             targetPaddle.getPaddle().position.set(position.x, position.y, currentPos.z);
             
-            console.log(`Remote paddle ${paddleIndex} updated: (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${currentPos.z.toFixed(2)})`);
+            // console.log(`Remote paddle ${paddleIndex} updated: (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${currentPos.z.toFixed(2)})`);
             return;
         }
         
@@ -629,21 +629,21 @@ export class Game {
             (this.isLocalPlayer ? this.playerPaddle : this.aiPaddle) :
             (this.isLocalPlayer ? this.aiPaddle : this.playerPaddle);
         
-        console.log(`Remote paddle update: ${isHostPaddle ? 'Host' : 'Guest'} paddle position before: ${JSON.stringify({
-            x: targetPaddle.getPaddle().position.x,
-            y: targetPaddle.getPaddle().position.y,
-            z: targetPaddle.getPaddle().position.z
-        })}`);
+        // console.log(`Remote paddle update: ${isHostPaddle ? 'Host' : 'Guest'} paddle position before: ${JSON.stringify({
+        //     x: targetPaddle.getPaddle().position.x,
+        //     y: targetPaddle.getPaddle().position.y,
+        //     z: targetPaddle.getPaddle().position.z
+        // })}`);
         
         // Only update X and Y positions, preserve Z position
         const currentPos = targetPaddle.getPaddle().position.clone();
         targetPaddle.getPaddle().position.set(position.x, position.y, currentPos.z);
         
-        console.log(`Remote paddle update: ${isHostPaddle ? 'Host' : 'Guest'} paddle position after: ${JSON.stringify({
-            x: targetPaddle.getPaddle().position.x,
-            y: targetPaddle.getPaddle().position.y,
-            z: targetPaddle.getPaddle().position.z
-        })}`);
+        // console.log(`Remote paddle update: ${isHostPaddle ? 'Host' : 'Guest'} paddle position after: ${JSON.stringify({
+        //     x: targetPaddle.getPaddle().position.x,
+        //     y: targetPaddle.getPaddle().position.y,
+        //     z: targetPaddle.getPaddle().position.z
+        // })}`);
     }
 
     updateRemoteBallPosition(position, velocity) {
