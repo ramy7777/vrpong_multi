@@ -41,6 +41,10 @@ export class Game {
         this.playerGroup = new THREE.Group();
         this.scene.add(this.playerGroup);
         
+        // For desktop mode, camera is in the scene
+        // For VR mode, camera will be moved to playerGroup
+        this.scene.add(this.camera);
+        
         // Desktop input tracking
         this.desktopControls = {
             keys: {
@@ -87,11 +91,49 @@ export class Game {
     }
 
     setupVR() {
+        // Define a standard floor height for VR
+        const floorHeight = 0.1; // Lowered by 1.5 units from previous value (1.6)
+        
         this.renderer.xr.addEventListener('sessionstart', () => {
             console.log('Setting up VR session');
-            // Removed problematic transform code
+            
+            // Ensure the camera is in the playerGroup for locomotion
+            if (!this.playerGroup.children.includes(this.camera)) {
+                // Reset position for VR
+                this.camera.position.set(0, 0, 0);
+                
+                // Remove camera from scene if it's there
+                this.scene.remove(this.camera);
+                
+                // Add camera to player group
+                this.playerGroup.add(this.camera);
+                
+                // Position the player group for good initial view
+                // X and Z position the player in the play area, Y sets the floor height
+                this.playerGroup.position.set(0, floorHeight, 0.8); 
+                this.playerGroup.lookAt(0, floorHeight, -1.0);
+                
+                console.log('Camera attached to player group for VR locomotion');
+            }
+            
+            // Store initial Y position to help maintain consistent floor height
+            this.initialFloorHeight = this.playerGroup.position.y;
+        });
+        
+        // Set session end event to restore desktop view
+        this.renderer.xr.addEventListener('sessionend', () => {
+            console.log('VR session ended, restoring desktop view');
+            
+            // Restore desktop camera setup when exiting VR
+            this.playerGroup.remove(this.camera);
+            this.scene.add(this.camera);
+            
+            // Restore desktop camera position and orientation
+            this.camera.position.set(0, 1.7, 0.8);
+            this.camera.lookAt(0, 0.9, -1.0);
         });
 
+        // Initialize VR controllers
         this.vrController = new VRController(this.renderer, this.playerGroup);
     }
 
@@ -663,6 +705,46 @@ export class Game {
             if (!this.isInVR && this.desktopControls.isMouseDown) {
                 const paddleX = THREE.MathUtils.clamp(this.desktopControls.mouseX * 1.2, -0.6, 0.6);
                 this.playerPaddle.getPaddle().position.x = paddleX;
+            }
+
+            // For VR mode, ensure controller inputs are properly handled
+            if (this.isInVR && this.vrController) {
+                const session = this.renderer.xr.getSession();
+                if (session) {
+                    // Check for input sources and their gamepads
+                    for (let i = 0; i < session.inputSources.length; i++) {
+                        const inputSource = session.inputSources[i];
+                        if (inputSource.gamepad) {
+                            const handedness = inputSource.handedness;
+                            const controller = handedness === 'left' ? 
+                                this.vrController.controllers[0] : 
+                                this.vrController.controllers[1];
+                            
+                            // Ensure controller movement is checked regardless of paddle interaction
+                            const side = handedness === 'left' ? 'left' : 'right';
+                            this.vrController.checkControllerState(
+                                controller,
+                                side,
+                                this.playerPaddle.getPaddle()
+                            );
+                        }
+                    }
+                    
+                    // Ensure player stays at the correct floor height
+                    if (this.initialFloorHeight !== undefined) {
+                        // Smoothly correct any vertical drift
+                        const currentY = this.playerGroup.position.y;
+                        const targetY = this.initialFloorHeight;
+                        if (Math.abs(currentY - targetY) > 0.01) {
+                            // Apply a small correction to gradually bring player back to floor level
+                            this.playerGroup.position.y = THREE.MathUtils.lerp(
+                                currentY, 
+                                targetY, 
+                                0.1 // Smooth correction factor
+                            );
+                        }
+                    }
+                }
             }
 
             // Handle multiplayer menu interactions
