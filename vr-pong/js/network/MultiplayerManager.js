@@ -14,7 +14,7 @@ export class MultiplayerManager {
             const protocol = window.location.protocol === 'https:' ? 'https://' : 'http://';
             const host = window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost' 
                 ? 'localhost:8443' 
-                : window.location.hostname + ':8443';
+                : window.location.hostname; // Remove the hardcoded port for Render.com
                 
             console.log(`Connecting to server at ${protocol}${host}`);
             
