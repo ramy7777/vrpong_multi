@@ -127,45 +127,134 @@ export class VRController {
         // Update paddle position, keeping Y and Z constant
         paddle.position.x = clampedX;
         paddle.position.y = 0.9;
-        paddle.position.z = -0.1;
+        // We no longer set Z position here, as it's determined by the paddle itself
     }
 
-    handlePaddleControl(side, controller, gamepad, paddle) {
+    // New method to check which paddle is closer to the controller
+    findClosestPaddle(controller, paddles) {
         const controllerPosition = new THREE.Vector3();
         controller.getWorldPosition(controllerPosition);
         
-        const paddlePosition = new THREE.Vector3();
-        paddle.getWorldPosition(paddlePosition);
-        const distance = controllerPosition.distanceTo(paddlePosition);
-
+        let closestPaddle = null;
+        let closestDistance = Infinity;
+        
+        // Check if paddles is an array
+        if (Array.isArray(paddles)) {
+            // Check distance to each paddle
+            for (let i = 0; i < paddles.length; i++) {
+                const paddle = paddles[i];
+                if (!paddle) continue;
+                
+                const paddlePosition = new THREE.Vector3();
+                paddle.getPaddle().getWorldPosition(paddlePosition);
+                const distance = controllerPosition.distanceTo(paddlePosition);
+                
+                if (distance < closestDistance) {
+                    closestDistance = distance;
+                    closestPaddle = paddle;
+                }
+            }
+        } else if (paddles && typeof paddles.getPaddle === 'function') {
+            // Single paddle object passed directly
+            closestPaddle = paddles;
+            const paddlePosition = new THREE.Vector3();
+            paddles.getPaddle().getWorldPosition(paddlePosition);
+            closestDistance = controllerPosition.distanceTo(paddlePosition);
+        } else if (paddles && typeof paddles.getWorldPosition === 'function') {
+            // Handle case where it's just the paddle mesh
+            closestPaddle = { getPaddle: () => paddles };
+            const paddlePosition = new THREE.Vector3();
+            paddles.getWorldPosition(paddlePosition);
+            closestDistance = controllerPosition.distanceTo(paddlePosition);
+        }
+        
+        // Return closest paddle and distance
+        return { paddle: closestPaddle, distance: closestDistance };
+    }
+    
+    // Updated method to handle multiple paddles
+    handlePaddleControl(side, controller, gamepad, paddles, playerId, isHost) {
+        // Some backward compatibility checks
+        playerId = playerId || 'default-player';
+        isHost = (isHost !== undefined) ? isHost : true;
+        
+        if (!paddles) return;
+        
+        const controllerPosition = new THREE.Vector3();
+        controller.getWorldPosition(controllerPosition);
+        
+        // Find closest paddle for this controller
+        const { paddle: closestPaddle, distance } = this.findClosestPaddle(controller, paddles);
+        if (!closestPaddle) return;
+        
         const wasTouching = this.controllerStates[side].touching;
-        this.controllerStates[side].touching = distance < 0.2; // Increased from 0.1 to 0.2 for larger grab area
-
+        this.controllerStates[side].touching = distance < 0.3; // Increased for better grabbing
+        
         const isGripping = gamepad.buttons[1]?.pressed;
         const wasGripping = this.controllerStates[side].gripping;
         this.controllerStates[side].gripping = isGripping;
-
+        
+        // Handle grabbing logic
         if (this.controllerStates[side].touching) {
+            // First-time grip - attempt to claim the paddle
             if (isGripping && !wasGripping) {
-                this.activeSide = side;
-                this.activeController = controller;
+                const paddleObj = closestPaddle;
                 
-                if (gamepad.hapticActuators?.[0]) {
-                    gamepad.hapticActuators[0].pulse(0.5, 50); // Lighter haptic feedback when grabbing
+                // If paddle doesn't have ownership methods, treat it as always claimable
+                const canClaim = typeof paddleObj.isOwned !== 'function' || 
+                                !paddleObj.isOwned() || 
+                                (typeof paddleObj.isOwnedBy === 'function' && paddleObj.isOwnedBy(playerId));
+                
+                if (canClaim) {
+                    // Claim ownership if has the capability and not already owned
+                    if (typeof paddleObj.isOwned === 'function' && 
+                        !paddleObj.isOwned() && 
+                        typeof paddleObj.claimOwnership === 'function') {
+                        paddleObj.claimOwnership(playerId, isHost);
+                    }
+                    
+                    this.activeSide = side;
+                    this.activeController = controller;
+                    this.activePaddle = paddleObj;
+                    
+                    if (gamepad.hapticActuators?.[0]) {
+                        gamepad.hapticActuators[0].pulse(0.7, 100); // Stronger feedback when claiming
+                    }
+                } else if (typeof paddleObj.isOwned === 'function' && paddleObj.isOwned()) {
+                    // Paddle is owned by someone else
+                    if (gamepad.hapticActuators?.[0]) {
+                        // Short, weak pulse to indicate cannot grab
+                        gamepad.hapticActuators[0].pulse(0.2, 50);
+                    }
                 }
             }
         }
-
-        if (side === this.activeSide && this.controllerStates[side].gripping && this.controllerStates[side].touching) {
-            const movement = controllerPosition.distanceTo(this.controllerStates[side].lastPosition);
-            this.updatePaddlePosition(paddle, controllerPosition);
-
-            if (movement > 0.001 && gamepad.hapticActuators?.[0]) {
-                const intensity = THREE.MathUtils.clamp(movement * 10, 0.1, 0.5);
-                gamepad.hapticActuators[0].pulse(intensity, 16);
+        
+        // Move owned paddle if gripping
+        if (side === this.activeSide && 
+            this.activePaddle) {
+            
+            // Check ownership if the paddle has that capability
+            const hasOwnership = typeof this.activePaddle.isOwnedBy !== 'function' || 
+                               this.activePaddle.isOwnedBy(playerId);
+            
+            if (this.controllerStates[side].gripping && hasOwnership) {
+                const movement = controllerPosition.distanceTo(this.controllerStates[side].lastPosition);
+                
+                // Get the actual mesh from the paddle
+                const paddleMesh = typeof this.activePaddle.getPaddle === 'function' ? 
+                                 this.activePaddle.getPaddle() : 
+                                 this.activePaddle;
+                
+                this.updatePaddlePosition(paddleMesh, controllerPosition);
+                
+                if (movement > 0.001 && gamepad.hapticActuators?.[0]) {
+                    const intensity = THREE.MathUtils.clamp(movement * 10, 0.1, 0.5);
+                    gamepad.hapticActuators[0].pulse(intensity, 16);
+                }
             }
         }
-
+        
         this.controllerStates[side].lastPosition.copy(controllerPosition);
     }
 
@@ -257,29 +346,30 @@ export class VRController {
         this.controllerStates.right.thumbstickPressed = isPressed;
     }
 
-    checkControllerState(controller, side, paddle) {
+    // Updated to handle multiple paddles
+    checkControllerState(controller, side, paddles, playerId, isHost) {
+        if (!controller || !controller.visible) return;
+        
         const session = this.renderer.xr.getSession();
         if (!session) return;
-
-        let inputSource = null;
+        
+        // Get the appropriate gamepad based on controller side
+        let gamepad = null;
         for (let i = 0; i < session.inputSources.length; i++) {
-            if (session.inputSources[i].handedness === (side === 'left' ? 'left' : 'right')) {
-                inputSource = session.inputSources[i];
+            const inputSource = session.inputSources[i];
+            if (inputSource.handedness === side && inputSource.gamepad) {
+                gamepad = inputSource.gamepad;
                 break;
             }
         }
         
-        if (!inputSource || !inputSource.gamepad) return;
-
-        const gamepad = inputSource.gamepad;
-        const currentTime = Date.now();
-        
-        // Always process thumbstick input first for responsive movement
-        this.handleThumbstickInput(side, gamepad, currentTime);
-        
-        // Process paddle interaction if a paddle is provided
-        if (paddle) {
-            this.handlePaddleControl(side, controller, gamepad, paddle);
+        if (gamepad) {
+            // Handle paddle grabbing and movement
+            this.handlePaddleControl(side, controller, gamepad, paddles, playerId, isHost);
+            
+            // Also handle thumbstick input for movement
+            const currentTime = Date.now();
+            this.handleThumbstickInput(side, gamepad, currentTime);
         }
     }
 }
