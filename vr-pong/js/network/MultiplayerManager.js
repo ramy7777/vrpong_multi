@@ -123,10 +123,18 @@ export class MultiplayerManager {
 
         // Receive remote paddle position updates
         this.socket.on('paddlePositionUpdated', (data) => {
-            console.log(`Received paddle position: x=${data.x.toFixed(2)}, y=${data.y.toFixed(2)}, z=${data.z.toFixed(2)}, isHost=${data.isHost}`);
+            console.log(`Received paddle position: x=${data.x.toFixed(2)}, y=${data.y.toFixed(2)}, z=${data.z.toFixed(2)}, isHost=${data.isHost}, paddleIndex=${data.paddleIndex}`);
             // Create position object from the received data
             const position = { x: data.x, y: data.y, z: data.z };
-            this.game.updateRemotePaddlePosition(position, data.isHost);
+            
+            // Pass along paddle index if it exists
+            const paddleIndex = data.paddleIndex !== undefined ? data.paddleIndex : null;
+            this.game.updateRemotePaddlePosition(position, data.isHost, paddleIndex);
+            
+            // Handle paddle ownership if this is the first update for this paddle
+            if (data.ownerId && paddleIndex !== null) {
+                this.game.updateRemotePaddleOwnership(paddleIndex, data.ownerId, data.isHost);
+            }
         });
 
         // Receive ball position updates (guest only)
@@ -150,6 +158,12 @@ export class MultiplayerManager {
         this.socket.on('remoteControllerData', (data) => {
             // Forward controller data to the game to update remote controller visualizations
             this.game.updateRemoteControllers(data);
+        });
+
+        // New listener for paddle ownership claims
+        this.socket.on('paddleOwnershipUpdated', (data) => {
+            console.log(`Received paddle ownership update: Paddle ${data.paddleIndex} claimed by ${data.isHost ? 'Host' : 'Guest'}`);
+            this.game.updateRemotePaddleOwnership(data.paddleIndex, data.ownerId, data.isHost);
         });
     }
 
@@ -218,16 +232,31 @@ export class MultiplayerManager {
     }
 
     // Send paddle position update
-    updatePaddlePosition(paddle) {
+    updatePaddlePosition(paddle, paddleIndex) {
         if (!this.socket || !this.socket.connected) return;
         
         const paddlePos = paddle.getPaddle().position;
-        console.log(`Sending paddle position: x=${paddlePos.x.toFixed(2)}, y=${paddlePos.y.toFixed(2)}, z=${paddlePos.z.toFixed(2)}`);
+        console.log(`Sending paddle position: x=${paddlePos.x.toFixed(2)}, y=${paddlePos.y.toFixed(2)}, z=${paddlePos.z.toFixed(2)}, index=${paddleIndex}`);
         
         this.socket.emit('updatePaddlePosition', {
             x: paddlePos.x,
             y: paddlePos.y,
             z: paddlePos.z,
+            isHost: this.isHost,
+            paddleIndex: paddleIndex,
+            ownerId: paddle.ownerId
+        });
+    }
+    
+    // Send paddle ownership update
+    updatePaddleOwnership(paddle, paddleIndex) {
+        if (!this.socket || !this.socket.connected) return;
+        
+        console.log(`Sending paddle ownership update: Paddle ${paddleIndex} claimed by ${this.isHost ? 'Host' : 'Guest'}`);
+        
+        this.socket.emit('updatePaddleOwnership', {
+            paddleIndex: paddleIndex,
+            ownerId: paddle.ownerId,
             isHost: this.isHost
         });
     }

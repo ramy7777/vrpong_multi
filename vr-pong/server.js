@@ -81,6 +81,14 @@ io.on('connection', (socket) => {
                 ballPosition: { x: 0, y: 0.9, z: -1.0 },
                 hostPaddlePosition: { x: 0, y: 0.9, z: -0.1 },
                 guestPaddlePosition: { x: 0, y: 0.9, z: -1.9 },
+                paddlePositions: {
+                    0: { x: 0, y: 0.9, z: -0.1 },  // Near paddle
+                    1: { x: 0, y: 0.9, z: -1.9 }   // Far paddle
+                },
+                paddleOwnership: {
+                    0: null,  // Near paddle
+                    1: null   // Far paddle
+                },
                 hostScore: 0,
                 guestScore: 0,
                 isPlaying: false
@@ -147,13 +155,33 @@ io.on('connection', (socket) => {
     
     // Update paddle position
     socket.on('updatePaddlePosition', (data) => {
-        const { x, y, z, isHost } = data;
+        const { x, y, z, isHost, paddleIndex, ownerId } = data;
         const position = { x, y, z };
         
         // Find the room this socket is in
         const roomId = [...socket.rooms].find(room => room !== socket.id && gameRooms[room]);
         
         if (roomId && gameRooms[roomId]) {
+            // Store position based on paddle index or host/guest status
+            if (paddleIndex !== undefined) {
+                if (!gameRooms[roomId].gameData.paddlePositions) {
+                    gameRooms[roomId].gameData.paddlePositions = {
+                        0: { x: 0, y: 0.9, z: -0.1 },
+                        1: { x: 0, y: 0.9, z: -1.9 }
+                    };
+                }
+                gameRooms[roomId].gameData.paddlePositions[paddleIndex] = position;
+                
+                // Also update ownership if provided
+                if (ownerId && gameRooms[roomId].gameData.paddleOwnership) {
+                    gameRooms[roomId].gameData.paddleOwnership[paddleIndex] = {
+                        ownerId: ownerId,
+                        isHost: isHost
+                    };
+                }
+            }
+            
+            // Also maintain the legacy data structure
             if (isHost) {
                 gameRooms[roomId].gameData.hostPaddlePosition = position;
             } else {
@@ -163,6 +191,41 @@ io.on('connection', (socket) => {
             // Broadcast to other player in the room
             socket.to(roomId).emit('paddlePositionUpdated', {
                 x, y, z,
+                isHost,
+                paddleIndex,
+                ownerId
+            });
+        }
+    });
+    
+    // Handle paddle ownership claims
+    socket.on('updatePaddleOwnership', (data) => {
+        const { paddleIndex, ownerId, isHost } = data;
+        
+        // Find the room this socket is in
+        const roomId = [...socket.rooms].find(room => room !== socket.id && gameRooms[room]);
+        
+        if (roomId && gameRooms[roomId]) {
+            // Initialize paddleOwnership if it doesn't exist
+            if (!gameRooms[roomId].gameData.paddleOwnership) {
+                gameRooms[roomId].gameData.paddleOwnership = {
+                    0: null,
+                    1: null
+                };
+            }
+            
+            // Update ownership
+            gameRooms[roomId].gameData.paddleOwnership[paddleIndex] = {
+                ownerId: ownerId,
+                isHost: isHost
+            };
+            
+            console.log(`Paddle ${paddleIndex} claimed by ${isHost ? 'Host' : 'Guest'} in room ${roomId}`);
+            
+            // Broadcast to other player in the room
+            socket.to(roomId).emit('paddleOwnershipUpdated', {
+                paddleIndex,
+                ownerId,
                 isHost
             });
         }

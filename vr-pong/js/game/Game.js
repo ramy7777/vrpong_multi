@@ -539,27 +539,33 @@ export class Game {
         this.startButton.hide();
         this.multiplayerMenu.hide();
         
-        // IMPORTANT: Force paddle positions to correct sides of table
-        // Recreate paddles to ensure they are positioned correctly
-        if (this.playerPaddle.getPaddle()) {
+        // Setup our player ID - using isHost as an indicator
+        this.playerId = isHost ? 'host-player' : 'guest-player';
+        
+        // IMPORTANT: Create two independent paddles
+        // Remove existing paddles if they exist
+        if (this.playerPaddle && this.playerPaddle.getPaddle()) {
             this.scene.remove(this.playerPaddle.getPaddle());
         }
-        if (this.aiPaddle.getPaddle()) {
+        if (this.aiPaddle && this.aiPaddle.getPaddle()) {
             this.scene.remove(this.aiPaddle.getPaddle());
         }
         
-        // Create new paddles with correct initial positions
-        this.playerPaddle = new Paddle(this.scene, false);
-        this.aiPaddle = new Paddle(this.scene, true);
+        // Create new paddles with correct indices
+        // Both players start at the same position with both paddles available
+        this.paddles = [
+            new Paddle(this.scene, false, 0), // Near paddle (player side)
+            new Paddle(this.scene, false, 1)  // Far paddle (opponent side)
+        ];
         
-        // Double-check positions are correct
-        this.playerPaddle.getPaddle().position.z = -0.1; // Near side
-        this.aiPaddle.getPaddle().position.z = -1.9;     // Far side
+        // For backward compatibility, maintain the old paddle references
+        this.playerPaddle = this.paddles[0];
+        this.aiPaddle = this.paddles[1];
         
-        console.log(`Paddle positions set - Player: ${this.playerPaddle.getPaddle().position.z}, AI: ${this.aiPaddle.getPaddle().position.z}`);
+        console.log(`Created two independent paddles at positions: Near(${this.paddles[0].getPaddle().position.z}), Far(${this.paddles[1].getPaddle().position.z})`);
         
-        // Show a message
-        this.showMessage('Game started!', 3000);
+        // Show a message about picking paddles
+        this.showMessage('Game started! Grab a paddle to claim it.', 5000);
         
         // Start the ball if we're the host
         if (isHost) {
@@ -578,11 +584,12 @@ export class Game {
         // Add haptic feedback when game starts
         const session = this.renderer.xr.getSession();
         if (session) {
-            session.inputSources.forEach(inputSource => {
-                if (inputSource.gamepad?.hapticActuators?.[0]) {
-                    inputSource.gamepad.hapticActuators[0].pulse(1.0, 50);
+            for (let i = 0; i < session.inputSources.length; i++) {
+                const inputSource = session.inputSources[i];
+                if (inputSource.gamepad && inputSource.gamepad.hapticActuators) {
+                    inputSource.gamepad.hapticActuators[0].pulse(1.0, 100);
                 }
-            });
+            }
         }
     }
 
@@ -604,8 +611,20 @@ export class Game {
         this.lastHitTime = currentTime;
     }
 
-    updateRemotePaddlePosition(position, isHostPaddle) {
-        // Update the appropriate paddle
+    updateRemotePaddlePosition(position, isHostPaddle, paddleIndex = null) {
+        // If we have a specific paddle index, use that
+        if (paddleIndex !== null && this.paddles && this.paddles.length > paddleIndex) {
+            const targetPaddle = this.paddles[paddleIndex];
+            
+            // Only update X and Y positions, preserve Z position
+            const currentPos = targetPaddle.getPaddle().position.clone();
+            targetPaddle.getPaddle().position.set(position.x, position.y, currentPos.z);
+            
+            console.log(`Remote paddle ${paddleIndex} updated: (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${currentPos.z.toFixed(2)})`);
+            return;
+        }
+        
+        // Backward compatibility - determine paddle based on host/guest status
         const targetPaddle = isHostPaddle ? 
             (this.isLocalPlayer ? this.playerPaddle : this.aiPaddle) :
             (this.isLocalPlayer ? this.aiPaddle : this.playerPaddle);
@@ -675,15 +694,20 @@ export class Game {
             this.isInVR = this.renderer.xr.isPresenting;
 
             if (this.vrController && this.isInVR) {
+                // Updated to pass both paddles to the controller
                 this.vrController.checkControllerState(
                     this.vrController.controllers[0],
                     'left',
-                    this.playerPaddle.getPaddle()
+                    this.paddles,
+                    this.playerId,
+                    this.isLocalPlayer  // isHost
                 );
                 this.vrController.checkControllerState(
                     this.vrController.controllers[1],
                     'right',
-                    this.playerPaddle.getPaddle()
+                    this.paddles,
+                    this.playerId,
+                    this.isLocalPlayer  // isHost
                 );
                 
                 // Send VR controller data over the network in multiplayer mode
@@ -697,9 +721,18 @@ export class Game {
 
             // Handle desktop controls when not in VR
             if (!this.isInVR && this.isGameStarted) {
+                // Find the paddle that belongs to this player in desktop mode
+                const ownedPaddle = this.paddles ? this.paddles.find(p => p.isOwnedBy(this.playerId)) : null;
+                // If no paddle is owned, try to claim paddle 0 in desktop mode
+                if (!ownedPaddle && this.paddles && this.paddles.length > 0) {
+                    this.paddles[0].claimOwnership(this.playerId, this.isLocalPlayer);
+                }
+                
+                // Use the owned paddle or fallback to player paddle
+                const paddle = ownedPaddle ? ownedPaddle.getPaddle() : this.playerPaddle.getPaddle();
+                
                 // Handle keyboard paddle movement
                 const paddleSpeed = 0.02;
-                const paddle = this.playerPaddle.getPaddle();
                 
                 if (this.desktopControls.keys['ArrowLeft'] || this.desktopControls.keys['a']) {
                     paddle.position.x -= paddleSpeed;
@@ -714,8 +747,12 @@ export class Game {
 
             // For desktop mode, use mouse position for paddle control when mouse is down
             if (!this.isInVR && this.desktopControls.isMouseDown) {
+                // Find the owned paddle or use playerPaddle as fallback
+                const ownedPaddle = this.paddles ? this.paddles.find(p => p.isOwnedBy(this.playerId)) : null;
+                const paddle = ownedPaddle ? ownedPaddle.getPaddle() : this.playerPaddle.getPaddle();
+                
                 const paddleX = THREE.MathUtils.clamp(this.desktopControls.mouseX * 1.2, -0.6, 0.6);
-                this.playerPaddle.getPaddle().position.x = paddleX;
+                paddle.position.x = paddleX;
             }
 
             // For VR mode, ensure controller inputs are properly handled
@@ -927,8 +964,14 @@ export class Game {
                     
                     // In multiplayer mode, send paddle position to the other player
                     if (this.isMultiplayer && this.multiplayerManager) {
-                        // Send our paddle position
-                        this.multiplayerManager.updatePaddlePosition(this.playerPaddle);
+                        // Find paddles owned by this player and send their positions
+                        if (this.paddles) {
+                            this.paddles.forEach((paddle, index) => {
+                                if (paddle.isOwnedBy(this.playerId)) {
+                                    this.multiplayerManager.updatePaddlePosition(paddle, index);
+                                }
+                            });
+                        }
                         
                         // If we're the host, send ball position too
                         if (this.isLocalPlayer) {
@@ -1072,6 +1115,17 @@ export class Game {
             const rotation = data.rightController.rotation;
             this.remoteControllers.right.position.set(position.x, position.y, position.z);
             this.remoteControllers.right.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+        }
+    }
+
+    // New method to handle remote paddle ownership claims
+    updateRemotePaddleOwnership(paddleIndex, playerId, isHost) {
+        if (!this.paddles || this.paddles.length <= paddleIndex) return;
+        
+        // Only update if this paddle is not already owned by the local player
+        if (!this.paddles[paddleIndex].isOwnedBy(this.playerId)) {
+            console.log(`Remote player claimed paddle ${paddleIndex}`);
+            this.paddles[paddleIndex].claimOwnership(playerId, isHost);
         }
     }
 }
