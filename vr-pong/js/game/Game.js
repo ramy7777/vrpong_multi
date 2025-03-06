@@ -411,6 +411,9 @@ export class Game {
                 }
             }
         });
+
+        // Create remote controller visualizations for multiplayer
+        this.createRemoteControllerVisuals();
     }
 
     createMessageDisplay() {
@@ -682,6 +685,14 @@ export class Game {
                     'right',
                     this.playerPaddle.getPaddle()
                 );
+                
+                // Send VR controller data over the network in multiplayer mode
+                if (this.isMultiplayer && this.multiplayerManager && this.multiplayerManager.isMultiplayerActive) {
+                    this.multiplayerManager.updateControllerData(
+                        this.vrController.controllers[0],
+                        this.vrController.controllers[1]
+                    );
+                }
             }
 
             // Handle desktop controls when not in VR
@@ -746,7 +757,7 @@ export class Game {
                     }
                 }
             }
-
+                
             // Handle multiplayer menu interactions
             if (this.multiplayerMenu.isVisible && this.isInVR) {
                 const leftIntersects = this.multiplayerMenu.checkIntersection(this.vrController.controllers[0]);
@@ -986,5 +997,81 @@ export class Game {
         }
         
         console.log("Game reset completed");
+    }
+
+    // Create visual representations of remote player's controllers
+    createRemoteControllerVisuals() {
+        // Create group to hold remote controller models
+        this.remoteControllerGroup = new THREE.Group();
+        this.scene.add(this.remoteControllerGroup);
+        
+        const controllerModelFactory = new XRControllerModelFactory();
+        
+        // Left remote controller
+        this.remoteControllers = {
+            left: new THREE.Group(),
+            right: new THREE.Group()
+        };
+        
+        // Create basic controller models
+        for (const side of ['left', 'right']) {
+            // Add controller grip for model
+            const grip = new THREE.Group();
+            grip.add(controllerModelFactory.createControllerModel(grip));
+            this.remoteControllers[side].add(grip);
+            
+            // Add a ray to represent controller direction
+            const ray = new THREE.Group();
+            const rayGeometry = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(0, 0, 0),
+                new THREE.Vector3(0, 0, -1)
+            ]);
+            
+            const rayMaterial = new THREE.LineBasicMaterial({
+                color: side === 'left' ? 0x0088ff : 0xff8800,
+                linewidth: 2
+            });
+            
+            const rayLine = new THREE.Line(rayGeometry, rayMaterial);
+            rayLine.scale.z = 0.5;
+            ray.add(rayLine);
+            
+            this.remoteControllers[side].add(ray);
+            
+            // Initially hide remote controllers
+            this.remoteControllers[side].visible = false;
+            
+            // Add to remote controller group
+            this.remoteControllerGroup.add(this.remoteControllers[side]);
+        }
+    }
+
+    // Update remote controller visualizations based on network data
+    updateRemoteControllers(data) {
+        if (!this.isMultiplayer || !this.remoteControllers) return;
+        
+        // Only show remote controllers in multiplayer mode
+        const isRemotePlayerInVR = (data.isHost !== this.isLocalPlayer);
+        if (!isRemotePlayerInVR) return;
+        
+        // Make remote controllers visible
+        this.remoteControllers.left.visible = true;
+        this.remoteControllers.right.visible = true;
+        
+        // Update left controller
+        if (data.leftController) {
+            const position = data.leftController.position;
+            const rotation = data.leftController.rotation;
+            this.remoteControllers.left.position.set(position.x, position.y, position.z);
+            this.remoteControllers.left.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+        }
+        
+        // Update right controller
+        if (data.rightController) {
+            const position = data.rightController.position;
+            const rotation = data.rightController.rotation;
+            this.remoteControllers.right.position.set(position.x, position.y, position.z);
+            this.remoteControllers.right.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+        }
     }
 }

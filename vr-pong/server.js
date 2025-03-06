@@ -242,6 +242,20 @@ io.on('connection', (socket) => {
         }
     });
     
+    // Handle VR controller data
+    socket.on('updateControllerData', (data) => {
+        const { roomId, isHost, leftController, rightController } = data;
+        
+        if (gameRooms[roomId]) {
+            // Broadcast controller data to the other player in the room
+            socket.to(roomId).emit('remoteControllerData', {
+                isHost,
+                leftController,
+                rightController
+            });
+        }
+    });
+    
     // Handle disconnection
     socket.on('disconnect', () => {
         console.log(`User disconnected: ${socket.id}`);

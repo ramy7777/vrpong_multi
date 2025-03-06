@@ -1,4 +1,6 @@
 // Use the global io from socket.io CDN
+import * as THREE from 'three';
+
 export class MultiplayerManager {
     constructor(game) {
         this.game = game;
@@ -88,8 +90,6 @@ export class MultiplayerManager {
                 // Show the start button for the host
                 if (this.game.startButton) {
                     this.game.startButton.show();
-                    // Change button text from "START" to "PLAY"
-                    this.game.startButton.updateButtonText('PLAY');
                 }
             } else {
                 this.opponentId = data.hostId;
@@ -144,6 +144,12 @@ export class MultiplayerManager {
         // Receive collision events
         this.socket.on('remoteCollision', (data) => {
             this.game.handleRemoteCollision(data.type, data.position);
+        });
+
+        // Receive remote controller data
+        this.socket.on('remoteControllerData', (data) => {
+            // Forward controller data to the game to update remote controller visualizations
+            this.game.updateRemoteControllers(data);
         });
     }
 
@@ -257,6 +263,40 @@ export class MultiplayerManager {
             type,
             position
         });
+    }
+
+    // Send VR controller positions and orientations
+    updateControllerData(leftController, rightController) {
+        if (!this.socket || !this.socket.connected || !this.isMultiplayerActive) return;
+        
+        // Only send controller data if we have valid controllers
+        if (!leftController || !rightController) return;
+
+        const leftPosition = new THREE.Vector3();
+        const leftRotation = new THREE.Quaternion();
+        leftController.getWorldPosition(leftPosition);
+        leftController.getWorldQuaternion(leftRotation);
+
+        const rightPosition = new THREE.Vector3();
+        const rightRotation = new THREE.Quaternion();
+        rightController.getWorldPosition(rightPosition);
+        rightController.getWorldQuaternion(rightRotation);
+
+        const controllerData = {
+            roomId: this.roomId,
+            isHost: this.isHost,
+            leftController: {
+                position: { x: leftPosition.x, y: leftPosition.y, z: leftPosition.z },
+                rotation: { x: leftRotation.x, y: leftRotation.y, z: leftRotation.z, w: leftRotation.w }
+            },
+            rightController: {
+                position: { x: rightPosition.x, y: rightPosition.y, z: rightPosition.z },
+                rotation: { x: rightRotation.x, y: rightRotation.y, z: rightRotation.z, w: rightRotation.w }
+            }
+        };
+        
+        // Send controller data to server
+        this.socket.emit('updateControllerData', controllerData);
     }
 
     // Check if we're in a multiplayer game

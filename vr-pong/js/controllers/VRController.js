@@ -174,8 +174,17 @@ export class VRController {
             const thumbstickX = gamepad.axes[2];
             const thumbstickY = gamepad.axes[3];
 
+            // Use a smaller deadzone for more responsive movement
+            const deadzone = 0.05;
+            const isThumbstickActive = Math.abs(thumbstickX) > deadzone || Math.abs(thumbstickY) > deadzone;
+
             if (side === 'left') {
-                this.handleMovement(thumbstickX, thumbstickY, gamepad);
+                if (isThumbstickActive) {
+                    this.handleMovement(thumbstickX, thumbstickY, gamepad);
+                    
+                    // Add debug logging for movement
+                    console.log(`VR Locomotion: Moving with left thumbstick (${thumbstickX.toFixed(2)}, ${thumbstickY.toFixed(2)})`);
+                }
             } else if (side === 'right') {
                 this.handleRotation(thumbstickX, gamepad, currentTime);
             }
@@ -183,21 +192,41 @@ export class VRController {
     }
 
     handleMovement(thumbstickX, thumbstickY, gamepad) {
-        if (Math.abs(thumbstickX) > 0.1 || Math.abs(thumbstickY) > 0.1) {
-            const moveX = thumbstickX * this.moveSpeed;
-            const moveZ = -thumbstickY * this.moveSpeed;
+        // Only process movement if thumbstick is moved beyond deadzone
+        if (Math.abs(thumbstickX) > 0.05 || Math.abs(thumbstickY) > 0.05) {
+            // Apply exponential control for finer movement at lower thumbstick values
+            const moveX = Math.sign(thumbstickX) * Math.pow(Math.abs(thumbstickX), 1.5) * this.moveSpeed;
+            const moveZ = -Math.sign(thumbstickY) * Math.pow(Math.abs(thumbstickY), 1.5) * this.moveSpeed;
 
+            // Get the player's forward direction but constrain it to the XZ plane
             const forward = new THREE.Vector3(0, 0, -1);
             forward.applyQuaternion(this.playerGroup.quaternion);
+            // Force Y component to zero to ensure horizontal movement only
+            forward.y = 0;
+            forward.normalize(); // Re-normalize after changing Y
 
+            // Calculate right vector (perpendicular to forward)
             const right = new THREE.Vector3(1, 0, 0);
             right.applyQuaternion(this.playerGroup.quaternion);
+            // Force Y component to zero to ensure horizontal movement only
+            right.y = 0;
+            right.normalize(); // Re-normalize after changing Y
 
-            this.playerGroup.position.add(right.multiplyScalar(moveX));
-            this.playerGroup.position.add(forward.multiplyScalar(moveZ));
+            // Calculate the movement vector in world space (constrained to XZ plane)
+            const movement = new THREE.Vector3();
+            movement.addScaledVector(right, moveX);
+            movement.addScaledVector(forward, moveZ);
 
+            // Ensure no vertical movement by explicitly setting Y to 0
+            // This guarantees we move only along the floor plane
+            movement.y = 0;
+
+            // Apply movement to player group (camera and controllers)
+            this.playerGroup.position.add(movement);
+
+            // Provide haptic feedback based on movement intensity
             if (gamepad.hapticActuators?.[0]) {
-                const intensity = Math.min(Math.sqrt(moveX * moveX + moveZ * moveZ), 0.5);
+                const intensity = Math.min(Math.sqrt(moveX * moveX + moveZ * moveZ) * 3, 0.5);
                 gamepad.hapticActuators[0].pulse(intensity, 16);
             }
         }
@@ -208,8 +237,15 @@ export class VRController {
         const isPressed = Math.abs(thumbstickX) > 0.7;
 
         if (isPressed && !wasPressed && currentTime - this.lastRotationTime > this.rotationCooldownTime) {
+            // Store current Y position to preserve height after rotation
+            const currentY = this.playerGroup.position.y;
+            
+            // Apply rotation around the Y axis only
             const rotationDirection = Math.sign(thumbstickX);
             this.playerGroup.rotateY(-this.snapAngle * rotationDirection);
+            
+            // Restore original Y position to prevent any height changes during rotation
+            this.playerGroup.position.y = currentY;
             
             if (gamepad.hapticActuators?.[0]) {
                 gamepad.hapticActuators[0].pulse(0.5, 50);
@@ -238,7 +274,12 @@ export class VRController {
         const gamepad = inputSource.gamepad;
         const currentTime = Date.now();
         
+        // Always process thumbstick input first for responsive movement
         this.handleThumbstickInput(side, gamepad, currentTime);
-        this.handlePaddleControl(side, controller, gamepad, paddle);
+        
+        // Process paddle interaction if a paddle is provided
+        if (paddle) {
+            this.handlePaddleControl(side, controller, gamepad, paddle);
+        }
     }
 }
