@@ -19,6 +19,47 @@ export class Game {
         this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
         this.renderer.shadowMap.enabled = true;
+        this.renderer.setSize(window.innerWidth, window.innerHeight);
+        this.renderer.xr.enabled = true;
+        document.body.appendChild(this.renderer.domElement);
+        document.body.appendChild(VRButton.createButton(this.renderer));
+
+        // Initialize game elements
+        this.paddleLeft = null;
+        this.paddleRight = null;
+        this.ball = null;
+        this.gameEnv = null;
+        this.startButton = null;
+        
+        // Game state variables
+        this.isGameStarted = false;
+        this.isInVR = false;
+        this.isMultiplayer = false;
+        this.scoreHost = 0;
+        this.scoreGuest = 0;
+        this.scoreDisplay = null;
+        this.timer = null;
+        this.secondsPassed = 0;
+        this.multiplayerMenu = null;
+        
+        // Desktop Controls
+        this.desktopControls = {
+            keys: {
+                'ArrowLeft': false,
+                'ArrowRight': false,
+                'a': false,
+                'd': false,
+                'A': false,
+                'D': false,
+                ' ': false,
+            },
+            isMouseDown: false,
+            mouseX: 0,
+            mouseY: 0,
+            isRightMouseDown: false, // Track right mouse button for camera rotation
+            lastMouseX: 0, // Track last mouse position for camera rotation
+            lastMouseY: 0
+        };
         
         // Game state
         this.isGameStarted = false;
@@ -44,20 +85,6 @@ export class Game {
         // For desktop mode, camera is in the scene
         // For VR mode, camera will be moved to playerGroup
         this.scene.add(this.camera);
-        
-        // Desktop input tracking
-        this.desktopControls = {
-            keys: {
-                'ArrowLeft': false,
-                'ArrowRight': false,
-                'a': false,
-                'd': false,
-                ' ': false
-            },
-            isMouseDown: false,
-            mouseX: 0,
-            mouseY: 0
-        };
         
         this.init();
         this.createGameElements();
@@ -111,9 +138,11 @@ export class Game {
                 // Position the player group for good initial view
                 // X and Z position the player in the play area, Y sets the floor height
                 this.playerGroup.position.set(0, floorHeight, 0.8); 
-                this.playerGroup.lookAt(0, floorHeight, -1.0);
                 
-                console.log('Camera attached to player group for VR locomotion');
+                // Rotate the player 180 degrees to face the opposite side
+                this.playerGroup.rotation.y = Math.PI;
+                
+                console.log('Camera attached to player group for VR locomotion with 180 rotation');
             }
             
             // Store initial Y position to help maintain consistent floor height
@@ -251,12 +280,22 @@ export class Game {
         });
 
         // Add mouse controls for paddle
-        window.addEventListener('mousedown', () => {
-            this.desktopControls.isMouseDown = true;
+        window.addEventListener('mousedown', (event) => {
+            if (event.button === 0) { // Left mouse button
+                this.desktopControls.isMouseDown = true;
+            } else if (event.button === 2) { // Right mouse button
+                this.desktopControls.isRightMouseDown = true;
+                this.desktopControls.lastMouseX = event.clientX;
+                this.desktopControls.lastMouseY = event.clientY;
+            }
         });
 
-        window.addEventListener('mouseup', () => {
-            this.desktopControls.isMouseDown = false;
+        window.addEventListener('mouseup', (event) => {
+            if (event.button === 0) { // Left mouse button
+                this.desktopControls.isMouseDown = false;
+            } else if (event.button === 2) { // Right mouse button
+                this.desktopControls.isRightMouseDown = false;
+            }
         });
         
         // Track mouse position for desktop paddle control
@@ -264,6 +303,29 @@ export class Game {
             // Convert mouse position to normalized coordinates (-1 to 1)
             this.desktopControls.mouseX = (event.clientX / window.innerWidth) * 2 - 1;
             this.desktopControls.mouseY = -(event.clientY / window.innerHeight) * 2 + 1;
+            
+            // Handle camera rotation with right mouse button
+            if (this.desktopControls.isRightMouseDown) {
+                const deltaX = event.clientX - this.desktopControls.lastMouseX;
+                const deltaY = event.clientY - this.desktopControls.lastMouseY;
+                
+                // Rotate camera based on mouse movement
+                // Adjust the sensitivity as needed
+                this.camera.rotation.y -= deltaX * 0.01;
+                this.camera.rotation.x -= deltaY * 0.01;
+                
+                // Limit vertical rotation to prevent flipping
+                this.camera.rotation.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, this.camera.rotation.x));
+                
+                // Update last mouse position
+                this.desktopControls.lastMouseX = event.clientX;
+                this.desktopControls.lastMouseY = event.clientY;
+            }
+        });
+
+        // Prevent context menu on right-click
+        window.addEventListener('contextmenu', (event) => {
+            event.preventDefault();
         });
 
         // Handle click events for UI buttons
@@ -519,7 +581,7 @@ export class Game {
             this.aiScoreDisplay.updateLabel(isHost ? 'OPPONENT' : 'YOU');
         } else {
             this.playerScoreDisplay.updateLabel('PONG MASTER');
-            this.aiScoreDisplay.updateLabel('YOU');
+            this.aiScoreDisplay.updateScore(0);
         }
     }
 

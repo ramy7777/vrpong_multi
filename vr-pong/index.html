@@ -69,17 +69,6 @@
             font-size: 18px;
             font-family: Arial, sans-serif;
         }
-        #instructions {
-            position: absolute;
-            bottom: 20px;
-            left: 0;
-            right: 0;
-            text-align: center;
-            color: white;
-            background: rgba(0, 0, 0, 0.7);
-            padding: 10px;
-            font-family: Arial, sans-serif;
-        }
     </style>
     <!-- Include Socket.IO client library from CDN -->
     <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
@@ -101,13 +90,6 @@
     <div id="errorMessage"></div>
     <div id="loadingMessage">Loading game assets...</div>
     
-    <div id="instructions" style="display: none;">
-        <h3>Desktop Controls</h3>
-        <p>Use the Arrow Keys or A/D to move your paddle left and right</p>
-        <p>Press Space to start the game</p>
-        <p>Click and drag with the mouse to control the paddle</p>
-    </div>
-
     <script type="importmap">
     {
         "imports": {
@@ -134,7 +116,6 @@
             const startVRBtn = document.getElementById('startVR');
             const startDesktopBtn = document.getElementById('startDesktop');
             const fallbackDesktopBtn = document.getElementById('fallbackDesktop');
-            const instructions = document.getElementById('instructions');
             
             // Function to start the game
             const startGame = (vrMode = false) => {
@@ -145,11 +126,6 @@
                     
                     // Initialize the game
                     game = new Game();
-                    
-                    // If desktop mode, show instructions
-                    if (!vrMode) {
-                        instructions.style.display = 'block';
-                    }
                     
                     loadingMsg.style.display = 'none';
                 } catch (error) {
