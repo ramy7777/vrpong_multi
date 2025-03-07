@@ -290,6 +290,69 @@ io.on('connection', (socket) => {
         }
     });
     
+    // Restart game (after timer has finished)
+    socket.on('restartGame', (data) => {
+        const { roomId } = data;
+        console.log(`RESTART EVENT: Received restartGame event for room ${roomId} from socket ${socket.id}`);
+        
+        if (!roomId) {
+            console.error(`Missing roomId in restartGame event from socket ${socket.id}`);
+            socket.emit('errorMessage', { message: 'Room ID is required for restart' });
+            return;
+        }
+        
+        if (gameRooms[roomId]) {
+            // Only the host can restart the game
+            if (gameRooms[roomId].host !== socket.id) {
+                console.log(`Non-host ${socket.id} attempted to restart game in room ${roomId}`);
+                socket.emit('errorMessage', { message: 'Only the host can restart the game' });
+                return;
+            }
+            
+            console.log(`RESTART EVENT: Restarting game in room ${roomId} by host ${socket.id}`);
+            
+            // Reset game data
+            gameRooms[roomId].gameData.hostScore = 0;
+            gameRooms[roomId].gameData.guestScore = 0;
+            gameRooms[roomId].gameData.isPlaying = true;
+            
+            // Get room sockets for direct emission
+            const roomSockets = io.sockets.adapter.rooms.get(roomId);
+            if (roomSockets) {
+                console.log(`RESTART EVENT: Room ${roomId} has ${roomSockets.size} connected clients`);
+                
+                // Log all connected socket IDs in this room
+                console.log(`RESTART EVENT: Connected sockets in room ${roomId}:`, 
+                           Array.from(roomSockets).join(', '));
+            } else {
+                console.log(`RESTART EVENT: No sockets found in room ${roomId}`);
+            }
+            
+            // Try both methods of emitting to room
+            try {
+                // Method 1: Broadcast restart to all players in the room
+                console.log(`RESTART EVENT: Broadcasting gameRestarted event to room ${roomId} using io.to()`);
+                io.to(roomId).emit('gameRestarted', { forceReset: true });
+                
+                // Method 2: Also try socket.to() as a backup
+                console.log(`RESTART EVENT: Broadcasting gameRestarted event using socket.to()`);
+                socket.to(roomId).emit('gameRestarted', { forceReset: true });
+                
+                // Method 3: Direct emission to host socket (always works for the host at least)
+                console.log(`RESTART EVENT: Emitting gameRestarted directly to host socket ${socket.id}`);
+                socket.emit('gameRestarted', { forceReset: true });
+                
+                // Success log
+                console.log(`RESTART EVENT: Successfully broadcast gameRestarted event to room ${roomId}`);
+            } catch (error) {
+                console.error(`Error broadcasting restart event: ${error.message}`);
+            }
+        } else {
+            console.log(`Attempted to restart game in non-existent room ${roomId}`);
+            socket.emit('errorMessage', { message: 'Game room not found' });
+        }
+    });
+    
     // Handle collision events
     socket.on('collisionEvent', (data) => {
         const { roomId, type, position } = data;

@@ -442,22 +442,41 @@ export class Game {
                     const restartButtonIntersects = raycaster.intersectObject(this.restartButton.getMesh(), true);
                     if (restartButtonIntersects.length > 0) {
                         if (this.restartButton.press()) {
-                            console.log("Restart button pressed in desktop mode - restarting game");
+                            console.log("Restart button pressed - restarting game");
                             
                             // Play sound if available
                             if (this.soundManager) {
                                 this.soundManager.playPaddleHit(); // Using an existing sound
                             }
                             
-                            // Hide the final score display and restart button
-                            this.finalScoreDisplay.hide();
-                            this.restartButton.hide();
-                            
-                            // Reset the game
-                            this.resetGame();
-                            
-                            // Start the game again
-                            this.startGame();
+                            // For multiplayer games, use the MultiplayerManager to restart
+                            if (this.isMultiplayer && this.multiplayerManager) {
+                                console.log("Using MultiplayerManager to restart the game");
+                                
+                                // Hide UI locally immediately for better user feedback
+                                this.finalScoreDisplay.hide();
+                                this.restartButton.hide();
+                                
+                                // Send restart request to server via MultiplayerManager
+                                const restartSent = this.multiplayerManager.restartGame();
+                                
+                                if (restartSent) {
+                                    this.showMessage("Restarting game for all players...", 3000);
+                                } else {
+                                    // If restart failed, show error message
+                                    this.showMessage("Failed to restart the game!", 3000);
+                                    
+                                    // Show the UI elements again 
+                                    this.finalScoreDisplay.show(this.playerScore, this.aiScore);
+                                    this.restartButton.show();
+                                }
+                            } else {
+                                // For single player, reset and start locally
+                                this.finalScoreDisplay.hide();
+                                this.restartButton.hide();
+                                this.resetGame();
+                                this.startGame();
+                            }
                         }
                     }
                 }
@@ -502,7 +521,7 @@ export class Game {
         this.finalScoreDisplay = new FinalScoreDisplay(this.scene);
         
         // Initialize game timer
-        this.timer = new Timer(this.scene, 120); // 120 seconds for the new timer
+        this.timer = new Timer(this.scene, 20); // 20 seconds for debugging
         
         // Create message display for notifications
         this.messageDisplay = this.createMessageDisplay();
@@ -1114,18 +1133,34 @@ export class Game {
                                 this.soundManager.playPaddleHit(); // Using an existing sound
                             }
                             
-                            // Trigger haptic feedback
-                            this.triggerPaddleHaptics(0.7, 100);
-                            
-                            // Hide the final score display and restart button
-                            this.finalScoreDisplay.hide();
-                            this.restartButton.hide();
-                            
-                            // Reset the game
-                            this.resetGame();
-                            
-                            // Start the game again
-                            this.startGame();
+                            // For multiplayer games, use the MultiplayerManager to restart
+                            if (this.isMultiplayer && this.multiplayerManager) {
+                                console.log("Using MultiplayerManager to restart the game");
+                                
+                                // Hide UI locally immediately for better user feedback
+                                this.finalScoreDisplay.hide();
+                                this.restartButton.hide();
+                                
+                                // Send restart request to server via MultiplayerManager
+                                const restartSent = this.multiplayerManager.restartGame();
+                                
+                                if (restartSent) {
+                                    this.showMessage("Restarting game for all players...", 3000);
+                                } else {
+                                    // If restart failed, show error message
+                                    this.showMessage("Failed to restart the game!", 3000);
+                                    
+                                    // Show the UI elements again 
+                                    this.finalScoreDisplay.show(this.playerScore, this.aiScore);
+                                    this.restartButton.show();
+                                }
+                            } else {
+                                // For single player, reset and start locally
+                                this.finalScoreDisplay.hide();
+                                this.restartButton.hide();
+                                this.resetGame();
+                                this.startGame();
+                            }
                         }
                     }
                 } else {
@@ -1149,54 +1184,57 @@ export class Game {
                         this.handleGameOver();
                     }
                     
-                    // Update ball movement - add this missing logic
-                    const collision = this.ball.update(this.clock.getDelta(), this.playerPaddle, this.aiPaddle);
-                    
-                    // Handle collisions and scoring
-                    if (collision === 'player' || collision === 'ai') {
-                        // Play sound and trigger haptics for paddle hits
-                        if (this.soundManager) {
-                            this.soundManager.playPaddleHit();
-                        }
-                        this.triggerPaddleHaptics(0.7, 50);
-                    } else if (collision === 'player_score') {
-                        // AI scored
-                        this.aiScore++;
-                        this.aiScoreDisplay.updateScore(this.aiScore);
-                        if (this.soundManager) {
-                            this.soundManager.playScore();
-                        }
+                    // Only update ball movement if the game is not over
+                    if (!this.gameOver) {
+                        // Update ball movement
+                        const collision = this.ball.update(this.clock.getDelta(), this.playerPaddle, this.aiPaddle);
                         
-                        // Sync scores in multiplayer mode
-                        if (this.isMultiplayer && this.multiplayerManager && this.isLocalPlayer) {
-                            this.multiplayerManager.updateScore(this.playerScore, this.aiScore);
-                        }
-                        
-                        // Start the ball again after short delay
-                        setTimeout(() => {
-                            if (this.isGameStarted && !this.isGamePaused) {
-                                this.ball.start();
+                        // Handle collisions and scoring
+                        if (collision === 'player' || collision === 'ai') {
+                            // Play sound and trigger haptics for paddle hits
+                            if (this.soundManager) {
+                                this.soundManager.playPaddleHit();
                             }
-                        }, 1000);
-                    } else if (collision === 'ai_score') {
-                        // Player scored
-                        this.playerScore++;
-                        this.playerScoreDisplay.updateScore(this.playerScore);
-                        if (this.soundManager) {
-                            this.soundManager.playScore();
-                        }
-                        
-                        // Sync scores in multiplayer mode
-                        if (this.isMultiplayer && this.multiplayerManager && this.isLocalPlayer) {
-                            this.multiplayerManager.updateScore(this.playerScore, this.aiScore);
-                        }
-                        
-                        // Start the ball again after short delay
-                        setTimeout(() => {
-                            if (this.isGameStarted && !this.isGamePaused) {
-                                this.ball.start();
+                            this.triggerPaddleHaptics(0.7, 50);
+                        } else if (collision === 'player_score') {
+                            // AI scored
+                            this.aiScore++;
+                            this.aiScoreDisplay.updateScore(this.aiScore);
+                            if (this.soundManager) {
+                                this.soundManager.playScore();
                             }
-                        }, 1000);
+                            
+                            // Sync scores in multiplayer mode
+                            if (this.isMultiplayer && this.multiplayerManager && this.isLocalPlayer) {
+                                this.multiplayerManager.updateScore(this.playerScore, this.aiScore);
+                            }
+                            
+                            // Start the ball again after short delay
+                            setTimeout(() => {
+                                if (this.isGameStarted && !this.isGamePaused && !this.gameOver) {
+                                    this.ball.start();
+                                }
+                            }, 1000);
+                        } else if (collision === 'ai_score') {
+                            // Player scored
+                            this.playerScore++;
+                            this.playerScoreDisplay.updateScore(this.playerScore);
+                            if (this.soundManager) {
+                                this.soundManager.playScore();
+                            }
+                            
+                            // Sync scores in multiplayer mode
+                            if (this.isMultiplayer && this.multiplayerManager && this.isLocalPlayer) {
+                                this.multiplayerManager.updateScore(this.playerScore, this.aiScore);
+                            }
+                            
+                            // Start the ball again after short delay
+                            setTimeout(() => {
+                                if (this.isGameStarted && !this.isGamePaused && !this.gameOver) {
+                                    this.ball.start();
+                                }
+                            }, 1000);
+                        }
                     }
                     
                     // Update AI paddle for single player mode
@@ -1238,8 +1276,12 @@ export class Game {
         // Reset game state flags
         this.isGameStarted = false;
         this.isGamePaused = false;
-        this.isMultiplayer = false;
         this.gameOver = false;
+        
+        // Keep multiplayer state if in multiplayer mode
+        if (!this.isMultiplayer) {
+            this.isMultiplayer = false;
+        }
         
         // Reset scores
         this.playerScore = 0;
@@ -1249,8 +1291,11 @@ export class Game {
         if (this.playerScoreDisplay) this.playerScoreDisplay.updateScore(0);
         if (this.aiScoreDisplay) this.aiScoreDisplay.updateScore(0);
         
-        // Reset ball position
-        if (this.ball) this.ball.reset();
+        // Reset ball position and ensure it's not moving
+        if (this.ball) {
+            this.ball.reset();
+            this.ball.ballVelocity.set(0, 0, 0);
+        }
         
         // Reset timer
         if (this.timer) this.timer.reset();
@@ -1270,16 +1315,26 @@ export class Game {
             this.aiPaddle.getPaddle().position.set(0, 1.0, -1.9);
         }
         
-        // Hide multiplayer menu if visible
-        if (this.multiplayerMenu && this.multiplayerMenu.isVisible) {
+        // Hide multiplayer menu if visible and not in multiplayer mode
+        if (this.multiplayerMenu && this.multiplayerMenu.isVisible && !this.isMultiplayer) {
             this.multiplayerMenu.hide();
         }
         
-        // Show and reset start button
-        if (this.startButton) {
+        // Show and reset start button if not in multiplayer mode
+        if (this.startButton && !this.isMultiplayer) {
             console.log("Resetting and showing start button");
             this.startButton.reset();
             this.startButton.show();
+        }
+        
+        // Hide final score display if visible
+        if (this.finalScoreDisplay) {
+            this.finalScoreDisplay.hide();
+        }
+        
+        // Hide restart button if visible
+        if (this.restartButton) {
+            this.restartButton.hide();
         }
         
         // Reset sound
@@ -1384,16 +1439,28 @@ export class Game {
         
         // Stop the ball by resetting it and setting velocity to zero
         if (this.ball) {
+            // Completely stop the ball from moving
             this.ball.reset();
-            // Ensure the ball doesn't move after reset
             this.ball.ballVelocity.set(0, 0, 0);
+            
+            // Ensure the ball is stationary by positioning it above the table
+            this.ball.getBall().position.set(0, 2.5, -1.0);
+            
+            // Debug log to confirm ball position and velocity
+            console.log("Ball stopped at position:", this.ball.getBall().position);
+            console.log("Ball velocity reset:", this.ball.ballVelocity);
         }
         
-        // Show the final score display
+        // Show the final score display for all players
         this.finalScoreDisplay.show(this.playerScore, this.aiScore);
         
-        // Show the restart button
-        this.restartButton.show();
+        // Only show the restart button to the host in multiplayer mode
+        if (!this.isMultiplayer || (this.isMultiplayer && this.multiplayerManager && this.multiplayerManager.isHost)) {
+            this.restartButton.show();
+        } else {
+            // For non-host players in multiplayer, show a message
+            this.showMessage("Game Over! Waiting for host to restart...", 5000);
+        }
         
         // Play a sound if available
         if (this.soundManager) {
@@ -1452,15 +1519,34 @@ export class Game {
                                 this.soundManager.playPaddleHit(); // Using an existing sound
                             }
                             
-                            // Hide the final score display and restart button
-                            this.finalScoreDisplay.hide();
-                            this.restartButton.hide();
-                            
-                            // Reset the game
-                            this.resetGame();
-                            
-                            // Start the game again
-                            this.startGame();
+                            // For multiplayer games, use the MultiplayerManager to restart
+                            if (this.isMultiplayer && this.multiplayerManager) {
+                                console.log("Using MultiplayerManager to restart the game");
+                                
+                                // Hide UI locally immediately for better user feedback
+                                this.finalScoreDisplay.hide();
+                                this.restartButton.hide();
+                                
+                                // Send restart request to server via MultiplayerManager
+                                const restartSent = this.multiplayerManager.restartGame();
+                                
+                                if (restartSent) {
+                                    this.showMessage("Restarting game for all players...", 3000);
+                                } else {
+                                    // If restart failed, show error message
+                                    this.showMessage("Failed to restart the game!", 3000);
+                                    
+                                    // Show the UI elements again 
+                                    this.finalScoreDisplay.show(this.playerScore, this.aiScore);
+                                    this.restartButton.show();
+                                }
+                            } else {
+                                // For single player, reset and start locally
+                                this.finalScoreDisplay.hide();
+                                this.restartButton.hide();
+                                this.resetGame();
+                                this.startGame();
+                            }
                         }
                     }
                 } else {

@@ -53,6 +53,14 @@ export class MultiplayerManager {
         this.socket.on('connect', () => {
             console.log('Connected to server with ID:', this.socket.id);
             this.isConnected = true;
+            
+            // If we're reconnecting and we're a host with a restart pending, try again
+            if (this.game && this.game.gameOver && this.isHost) {
+                console.log('RESTART EVENT: Reconnected as host with game over - retrying restart');
+                setTimeout(() => {
+                    this.restartGame();
+                }, 1000);
+            }
         });
 
         // Disconnect event
@@ -110,6 +118,37 @@ export class MultiplayerManager {
         this.socket.on('gameStarted', () => {
             console.log('Game started!');
             this.game.startMultiplayerGame(this.isHost);
+        });
+        
+        // Game restarted (by host)
+        this.socket.on('gameRestarted', (data = {}) => {
+            console.log('RESTART EVENT: Received gameRestarted event from server!', data);
+            
+            // Check for force reset flag (added for more robust client resets)
+            if (data && data.forceReset) {
+                console.log('RESTART EVENT: forceReset flag detected, performing complete reset');
+                
+                // Force direct manipulation of game properties for client
+                if (this.game) {
+                    // Reset core game state
+                    this.game.gameOver = false;
+                    this.game.playerScore = 0;
+                    this.game.aiScore = 0;
+                    
+                    // Force hide UI elements directly
+                    if (this.game.finalScoreDisplay && this.game.finalScoreDisplay.mesh) {
+                        this.game.finalScoreDisplay.mesh.visible = false;
+                    }
+                    
+                    if (this.game.restartButton && this.game.restartButton.getMesh) {
+                        const mesh = this.game.restartButton.getMesh();
+                        if (mesh) mesh.visible = false;
+                    }
+                }
+            }
+            
+            // Perform the restart regardless of who we are (host or guest)
+            this.performGameRestart();
         });
 
         // No games available to join
@@ -242,6 +281,37 @@ export class MultiplayerManager {
         return true;
     }
 
+    // Restart the game (host only)
+    restartGame() {
+        console.log('RESTART EVENT: MultiplayerManager.restartGame called - isHost:', this.isHost, 'roomId:', this.roomId);
+        
+        if (!this.isHost || !this.roomId) {
+            console.log('RESTART EVENT: Cannot restart game: not a host or no room ID');
+            return false;
+        }
+        
+        console.log('RESTART EVENT: Emitting restartGame event to server for room:', this.roomId);
+        this.socket.emit('restartGame', { roomId: this.roomId });
+        
+        // For the host, we'll add a fallback direct restart
+        // This ensures the host's game restarts regardless of server issues
+        if (this.isHost) {
+            console.log('RESTART EVENT: Host initiating fallback restart timer');
+            
+            // Fallback restart for the host player after 1 second if server event fails
+            setTimeout(() => {
+                if (this.game.gameOver) {
+                    console.log('RESTART EVENT: Fallback restart activating for host - server event may have failed');
+                    this.performGameRestart();
+                } else {
+                    console.log('RESTART EVENT: Fallback not needed, game already restarted');
+                }
+            }, 1000);
+        }
+        
+        return true;
+    }
+
     // Send paddle position update
     updatePaddlePosition(paddle, paddleIndex) {
         if (!this.socket || !this.socket.connected) return;
@@ -347,5 +417,85 @@ export class MultiplayerManager {
     // Check if we're the host
     isHosting() {
         return this.isHost;
+    }
+
+    // Helper method to perform the actual game restart
+    performGameRestart() {
+        console.log('RESTART EVENT: Performing game restart');
+        
+        // Reset game state completely
+        console.log('RESTART EVENT: Setting gameOver to false');
+        this.game.gameOver = false;
+        
+        // Force hide game over UI elements - more aggressively for clients
+        console.log('RESTART EVENT: Force hiding game over UI elements');
+        
+        // Handle the final score display
+        if (this.game.finalScoreDisplay) {
+            // Force hide and check visibility
+            this.game.finalScoreDisplay.hide();
+            console.log('RESTART EVENT: Forced finalScoreDisplay hide');
+            
+            // For client-side, try direct DOM manipulation if mesh exists
+            if (this.game.finalScoreDisplay.mesh) {
+                this.game.finalScoreDisplay.mesh.visible = false;
+                console.log('RESTART EVENT: Directly set finalScoreDisplay mesh visibility to false');
+            }
+        }
+        
+        // Handle the restart button - only visible for host but clear for everyone
+        if (this.game.restartButton) {
+            this.game.restartButton.hide();
+            console.log('RESTART EVENT: Forced restartButton hide');
+            
+            // For client-side, try direct DOM manipulation if mesh exists
+            if (this.game.restartButton.getMesh) {
+                const buttonMesh = this.game.restartButton.getMesh();
+                if (buttonMesh) {
+                    buttonMesh.visible = false;
+                    console.log('RESTART EVENT: Directly set restartButton mesh visibility to false');
+                }
+            }
+        }
+        
+        // Clear any pending timeouts that might impact the game state
+        if (typeof window !== 'undefined') {
+            // Clear a wide range of timeouts to be sure
+            for (let i = 0; i < 1000; i++) {
+                window.clearTimeout(i);
+            }
+            console.log('RESTART EVENT: Cleared pending timeouts');
+        }
+        
+        // Reset the game state
+        console.log('RESTART EVENT: Calling game.resetGame()');
+        this.game.resetGame();
+        
+        // Start the game again
+        console.log('RESTART EVENT: Calling game.startGame()');
+        this.game.startGame();
+        
+        // Show notification specifically indicating this was a remote restart for clients
+        if (!this.isHost) {
+            this.game.showMessage('Game restarted by host!', 3000);
+        } else {
+            this.game.showMessage('Game restarted!', 3000);
+        }
+        
+        // Confirm game over menu is gone
+        setTimeout(() => {
+            // Double-check UI elements are hidden
+            if (this.game.finalScoreDisplay && this.game.finalScoreDisplay.mesh && 
+                this.game.finalScoreDisplay.mesh.visible) {
+                console.log('RESTART EVENT: WARNING - finalScoreDisplay still visible after restart, forcing hide');
+                this.game.finalScoreDisplay.mesh.visible = false;
+            } else {
+                console.log('RESTART EVENT: Confirmed finalScoreDisplay is hidden');
+            }
+            
+            console.log('RESTART EVENT: Verifying restart: gameOver =', this.game.gameOver, 
+                        'ballVelocity =', this.game.ball ? this.game.ball.ballVelocity : 'n/a',
+                        'scores =', this.game.playerScore, this.game.aiScore);
+        }, 500);
     }
 }
