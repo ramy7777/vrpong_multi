@@ -581,8 +581,10 @@ export class Game {
         
         // Update UI labels based on multiplayer status
         if (isActive) {
-            this.playerScoreDisplay.updateLabel(isHost ? 'YOU' : 'OPPONENT');
-            this.aiScoreDisplay.updateLabel(isHost ? 'OPPONENT' : 'YOU');
+            // Always show the local player's score as "YOU" and the remote player's as "OPPONENT"
+            // regardless of whether they're host or guest
+            this.playerScoreDisplay.updateLabel('YOU');
+            this.aiScoreDisplay.updateLabel('OPPONENT');
         } else {
             this.playerScoreDisplay.updateLabel('PONG MASTER');
             this.aiScoreDisplay.updateScore(0);
@@ -721,16 +723,26 @@ export class Game {
     }
 
     updateRemoteScore(hostScore, guestScore) {
-        if (this.isLocalPlayer) {
-            this.playerScore = hostScore;
-            this.aiScore = guestScore;
-        } else {
-            this.playerScore = guestScore;
-            this.aiScore = hostScore;
+        // Determine which score belongs to the local player based on their role
+        let localPlayerScore, remotePlayerScore;
+        
+        if (this.isLocalPlayer) {  // If local player is host
+            localPlayerScore = hostScore;
+            remotePlayerScore = guestScore;
+        } else {  // If local player is guest
+            localPlayerScore = guestScore;
+            remotePlayerScore = hostScore;
         }
         
-        this.playerScoreDisplay.updateScore(this.playerScore);
-        this.aiScoreDisplay.updateScore(this.aiScore);
+        // Update the internal score variables for consistency with the rest of the code
+        this.playerScore = localPlayerScore;
+        this.aiScore = remotePlayerScore;
+        
+        // Update the score displays
+        // playerScoreDisplay always shows the local player's score (YOU)
+        // aiScoreDisplay always shows the remote player's score (OPPONENT)
+        this.playerScoreDisplay.updateScore(localPlayerScore);
+        this.aiScoreDisplay.updateScore(remotePlayerScore);
     }
 
     handleRemoteCollision(type, position) {
