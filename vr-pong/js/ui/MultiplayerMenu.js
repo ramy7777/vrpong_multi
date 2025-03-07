@@ -18,6 +18,10 @@ export class MultiplayerMenu {
             onBack: null
         };
         
+        // Preload Orbitron font to use in canvas
+        this.fontLoaded = false;
+        this.preloadOrbitronFont();
+        
         // Add debounce mechanism to prevent multiple activations
         this.lastButtonPressTime = 0;
         this.buttonCooldown = 800; // Increased from 500ms to 800ms to prevent accidental double clicks
@@ -57,6 +61,29 @@ export class MultiplayerMenu {
         
         this.createMenu();
         this.hide(); // Initially hidden
+    }
+    
+    // Preload Orbitron font for canvas text
+    preloadOrbitronFont() {
+        // Create a font face observer for Orbitron
+        const fontLink = document.createElement('link');
+        fontLink.href = 'https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap';
+        fontLink.rel = 'stylesheet';
+        document.head.appendChild(fontLink);
+        
+        // Create a test element to force font loading
+        const testElement = document.createElement('div');
+        testElement.style.fontFamily = 'Orbitron, Arial, sans-serif';
+        testElement.style.position = 'absolute';
+        testElement.style.visibility = 'hidden';
+        testElement.textContent = 'Font Preload';
+        document.body.appendChild(testElement);
+        
+        // Set a timeout to ensure font is loaded
+        setTimeout(() => {
+            this.fontLoaded = true;
+            document.body.removeChild(testElement);
+        }, 500);
     }
     
     createMenu() {
@@ -134,7 +161,7 @@ export class MultiplayerMenu {
         titleGradient.addColorStop(1, '#b3e5fc');
         
         titleContext.fillStyle = titleGradient;
-        titleContext.font = 'bold 64px Arial';
+        titleContext.font = 'bold 64px Orbitron, Arial, sans-serif';
         titleContext.textAlign = 'center';
         titleContext.textBaseline = 'middle';
         
@@ -156,6 +183,14 @@ export class MultiplayerMenu {
         titleContext.moveTo(128, 90);
         titleContext.lineTo(384, 90);
         titleContext.stroke();
+        
+        // Add glow effect
+        titleContext.globalCompositeOperation = 'lighter';
+        titleContext.shadowColor = '#4d69ff';
+        titleContext.shadowBlur = 15;
+        titleContext.fillStyle = 'rgba(77, 105, 255, 0.3)';
+        titleContext.fillText('GAME MODE', titleCanvas.width / 2, titleCanvas.height / 2);
+        titleContext.globalCompositeOperation = 'source-over';
         
         const titleTexture = new THREE.CanvasTexture(titleCanvas);
         const titleMaterial = new THREE.MeshBasicMaterial({
@@ -189,8 +224,9 @@ export class MultiplayerMenu {
     createButton(text, x, y, z, buttonType) {
         const group = new THREE.Group();
         
-        // Create rounded button geometry
-        const buttonGeometry = new THREE.BoxGeometry(0.6, 0.15, 0.04);
+        // Create rounded button geometry - increase width for longer text
+        const buttonWidth = text.length > 10 ? 0.7 : 0.6;
+        const buttonGeometry = new THREE.BoxGeometry(buttonWidth, 0.15, 0.04);
         buttonGeometry.userData = { originalGeometry: buttonGeometry.clone() };
         
         // Get color from the button type
@@ -206,8 +242,8 @@ export class MultiplayerMenu {
         
         const buttonMesh = new THREE.Mesh(buttonGeometry, buttonMaterial);
         
-        // Add subtle bevel to buttons
-        const edgeGeometry = new THREE.BoxGeometry(0.62, 0.17, 0.03);
+        // Add subtle bevel to buttons - adjust bevel width to match button width
+        const edgeGeometry = new THREE.BoxGeometry(buttonWidth + 0.02, 0.17, 0.03);
         const edgeMaterial = new THREE.MeshStandardMaterial({
             color: 0xffffff,
             metalness: 0.7,
@@ -236,7 +272,17 @@ export class MultiplayerMenu {
         textGradient.addColorStop(1, '#f0f0f0');
         
         context.fillStyle = textGradient;
-        context.font = 'bold 32px Arial';
+        
+        // Adjust font size based on text length
+        let fontSize = 32;
+        if (text.length > 10) {
+            fontSize = 28;
+        }
+        if (text.length > 12) {
+            fontSize = 24;
+        }
+        
+        context.font = `bold ${fontSize}px Orbitron, Arial, sans-serif`;
         context.textAlign = 'center';
         context.textBaseline = 'middle';
         
@@ -246,7 +292,37 @@ export class MultiplayerMenu {
         context.shadowOffsetX = 1;
         context.shadowOffsetY = 1;
         
-        context.fillText(text, canvas.width / 2, canvas.height / 2);
+        // Add letter spacing effect with dynamic adjustment
+        const letters = text.split('');
+        // Reduce letter spacing for longer text
+        const letterSpacing = text.length > 10 ? 1 : 2;
+        const totalTextWidth = letters.reduce((width, letter) => width + context.measureText(letter).width + letterSpacing, 0) - letterSpacing;
+        
+        // If text is still too wide, just render it without spacing
+        if (totalTextWidth > canvas.width * 0.9) {
+            // Standard text rendering without letter spacing
+            context.fillText(text, canvas.width / 2, canvas.height / 2);
+        } else {
+            // Apply letter spacing
+            let currentX = (canvas.width - totalTextWidth) / 2;
+            letters.forEach(letter => {
+                context.fillText(letter, currentX + context.measureText(letter).width / 2, canvas.height / 2);
+                currentX += context.measureText(letter).width + letterSpacing;
+            });
+            
+            // Add subtle glow
+            context.globalCompositeOperation = 'lighter';
+            context.shadowColor = 'rgba(255, 255, 255, 0.5)';
+            context.shadowBlur = 3;
+            context.fillStyle = 'rgba(255, 255, 255, 0.2)';
+            
+            currentX = (canvas.width - totalTextWidth) / 2;
+            letters.forEach(letter => {
+                context.fillText(letter, currentX + context.measureText(letter).width / 2, canvas.height / 2);
+                currentX += context.measureText(letter).width + letterSpacing;
+            });
+            context.globalCompositeOperation = 'source-over';
+        }
         
         const textTexture = new THREE.CanvasTexture(canvas);
         const textMaterial = new THREE.MeshBasicMaterial({
@@ -254,7 +330,9 @@ export class MultiplayerMenu {
             transparent: true
         });
         
-        const textGeometry = new THREE.PlaneGeometry(0.55, 0.1);
+        // Adjust text plane size to match button width
+        const textWidth = text.length > 10 ? 0.65 : 0.55;
+        const textGeometry = new THREE.PlaneGeometry(textWidth, 0.1);
         const textMesh = new THREE.Mesh(textGeometry, textMaterial);
         textMesh.position.z = 0.021;
         group.add(textMesh);
