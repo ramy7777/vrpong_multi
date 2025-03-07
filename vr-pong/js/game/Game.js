@@ -193,6 +193,9 @@ export class Game {
                 this.aiPaddle.getPaddle().position.z = -1.9;
                 this.playerPaddle.getPaddle().position.z = -0.1;
                 
+                // Hide the start button
+                this.startButton.hide();
+                
                 // Start game directly
                 this.ball.start();
                 this.timer.start();
