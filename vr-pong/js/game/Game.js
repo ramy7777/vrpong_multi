@@ -139,10 +139,11 @@ export class Game {
                 // X and Z position the player in the play area, Y sets the floor height
                 this.playerGroup.position.set(0, floorHeight, 0.8); 
                 
-                // Rotate the player 180 degrees to face the opposite side
-                this.playerGroup.rotation.y = Math.PI;
+                // Set player rotation to make them face the table
+                // If player is facing opposite direction, we need to face them toward -Z
+                this.playerGroup.rotation.y = 0; // No rotation needed to face the table
                 
-                console.log('Camera attached to player group for VR locomotion with 180 rotation');
+                console.log('Camera attached to player group for VR locomotion facing the table');
             }
             
             // Store initial Y position to help maintain consistent floor height
