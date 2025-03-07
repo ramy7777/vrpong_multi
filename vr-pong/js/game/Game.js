@@ -521,7 +521,7 @@ export class Game {
         this.finalScoreDisplay = new FinalScoreDisplay(this.scene);
         
         // Initialize game timer
-        this.timer = new Timer(this.scene, 20); // 20 seconds for debugging
+        this.timer = new Timer(this.scene, 150); // 2 minutes and 30 seconds
         
         // Create message display for notifications
         this.messageDisplay = this.createMessageDisplay();
