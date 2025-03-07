@@ -11,6 +11,8 @@ import { ScoreDisplay } from '../ui/ScoreDisplay.js';
 import { Timer } from '../ui/Timer.js';
 import { MultiplayerMenu } from '../ui/MultiplayerMenu.js';
 import { MultiplayerManager } from '../network/MultiplayerManager.js';
+import { RestartButton } from '../ui/RestartButton.js';
+import { FinalScoreDisplay } from '../ui/FinalScoreDisplay.js';
 
 export class Game {
     constructor() {
@@ -41,6 +43,7 @@ export class Game {
         this.timer = null;
         this.secondsPassed = 0;
         this.multiplayerMenu = null;
+        this.gameOver = false;
         
         // Desktop Controls
         this.desktopControls = {
@@ -314,12 +317,11 @@ export class Game {
                 const deltaY = event.clientY - this.desktopControls.lastMouseY;
                 
                 // Rotate camera based on mouse movement
-                // Adjust the sensitivity as needed
                 this.camera.rotation.y -= deltaX * 0.01;
                 this.camera.rotation.x -= deltaY * 0.01;
                 
-                // Limit vertical rotation to prevent flipping
-                this.camera.rotation.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, this.camera.rotation.x));
+                // Clamp vertical rotation to prevent flipping
+                this.camera.rotation.x = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, this.camera.rotation.x));
                 
                 // Update last mouse position
                 this.desktopControls.lastMouseX = event.clientX;
@@ -332,16 +334,46 @@ export class Game {
                 const mouseX = this.desktopControls.mouseX;
                 const mouseY = this.desktopControls.mouseY;
                 
-                // Check for menu button intersections
+                // Create a raycaster and check for intersections
                 const hoverIntersect = this.multiplayerMenu.checkMouseIntersection(mouseX, mouseY, this.camera);
                 
-                // Handle highlighting changes
                 if (hoverIntersect) {
-                    // Highlight new button if not already highlighted
                     this.multiplayerMenu.highlightButton(hoverIntersect.button);
-                } else if (this.multiplayerMenu.currentHoveredButton) {
+                } else {
                     // Unhighlight current button if mouse is no longer over any button
-                    this.multiplayerMenu.unhighlightButton(this.multiplayerMenu.currentHoveredButton);
+                    ['singleplayer', 'host', 'join', 'back'].forEach(buttonKey => {
+                        this.multiplayerMenu.unhighlightButton(buttonKey);
+                    });
+                }
+            }
+            
+            // Handle mouse hover for start button in desktop mode
+            if (!this.isInVR && !this.isGameStarted && this.startButton && this.startButton.getMesh().visible) {
+                const raycaster = new THREE.Raycaster();
+                const mouse = new THREE.Vector2(this.desktopControls.mouseX, this.desktopControls.mouseY);
+                
+                raycaster.setFromCamera(mouse, this.camera);
+                
+                const startButtonIntersects = raycaster.intersectObject(this.startButton.getMesh(), true);
+                if (startButtonIntersects.length > 0) {
+                    this.startButton.highlight();
+                } else {
+                    this.startButton.unhighlight();
+                }
+            }
+            
+            // Handle mouse hover for restart button in desktop mode
+            if (!this.isInVR && this.gameOver && this.restartButton && this.restartButton.isVisible()) {
+                const raycaster = new THREE.Raycaster();
+                const mouse = new THREE.Vector2(this.desktopControls.mouseX, this.desktopControls.mouseY);
+                
+                raycaster.setFromCamera(mouse, this.camera);
+                
+                const restartButtonIntersects = raycaster.intersectObject(this.restartButton.getMesh(), true);
+                if (restartButtonIntersects.length > 0) {
+                    this.restartButton.highlight();
+                } else {
+                    this.restartButton.unhighlight();
                 }
             }
         });
@@ -404,6 +436,31 @@ export class Game {
                     }
                 }
                 
+                // Check restart button intersection when game is over
+                if (this.gameOver && this.restartButton && this.restartButton.isVisible()) {
+                    const restartButtonIntersects = raycaster.intersectObject(this.restartButton.getMesh(), true);
+                    if (restartButtonIntersects.length > 0) {
+                        if (this.restartButton.press()) {
+                            console.log("Restart button pressed in desktop mode - restarting game");
+                            
+                            // Play sound if available
+                            if (this.soundManager) {
+                                this.soundManager.playPaddleHit(); // Using an existing sound
+                            }
+                            
+                            // Hide the final score display and restart button
+                            this.finalScoreDisplay.hide();
+                            this.restartButton.hide();
+                            
+                            // Reset the game
+                            this.resetGame();
+                            
+                            // Start the game again
+                            this.startGame();
+                        }
+                    }
+                }
+                
                 // Check multiplayer menu button intersections
                 if (this.multiplayerMenu.isVisible) {
                     const singleplayerIntersects = raycaster.intersectObject(this.multiplayerMenu.buttons.singleplayer, true);
@@ -437,8 +494,14 @@ export class Game {
         this.aiPaddle = new Paddle(this.scene, true);
         this.startButton = new StartButton(this.scene);
         
+        // Initialize the restart button (initially hidden)
+        this.restartButton = new RestartButton(this.scene);
+        
+        // Initialize the final score display (initially hidden)
+        this.finalScoreDisplay = new FinalScoreDisplay(this.scene);
+        
         // Initialize game timer
-        this.timer = new Timer(this.scene, 180); // 3 minute game timer
+        this.timer = new Timer(this.scene, 20); // 20 seconds for debugging (changed from 180)
         
         // Create message display for notifications
         this.messageDisplay = this.createMessageDisplay();
@@ -1010,10 +1073,57 @@ export class Game {
                 }
             }
 
+            // Handle restart button interaction when game is over
+            if (this.gameOver && this.restartButton && this.restartButton.isVisible() && this.isInVR) {
+                const leftIntersects = this.restartButton.checkIntersection(this.vrController.controllers[0]);
+                const rightIntersects = this.restartButton.checkIntersection(this.vrController.controllers[1]);
+                
+                if (leftIntersects || rightIntersects) {
+                    console.log(`VR controller intersecting restart button: Left: ${leftIntersects ? 'YES' : 'NO'}, Right: ${rightIntersects ? 'YES' : 'NO'}`);
+                    
+                    this.restartButton.highlight();
+                    
+                    // Only process button press on the initial press event
+                    const leftIsNewPress = leftIntersects && this.vrController.controllers[0].userData.isSelecting && this.vrController.controllers[0].userData.isNewPress;
+                    const rightIsNewPress = rightIntersects && this.vrController.controllers[1].userData.isSelecting && this.vrController.controllers[1].userData.isNewPress;
+                    
+                    if (leftIsNewPress || rightIsNewPress) {
+                        if (this.restartButton.press()) {
+                            console.log("Restart button pressed - restarting game");
+                            
+                            // Play sound if available
+                            if (this.soundManager) {
+                                this.soundManager.playPaddleHit(); // Using an existing sound
+                            }
+                            
+                            // Trigger haptic feedback
+                            this.triggerPaddleHaptics(0.7, 100);
+                            
+                            // Hide the final score display and restart button
+                            this.finalScoreDisplay.hide();
+                            this.restartButton.hide();
+                            
+                            // Reset the game
+                            this.resetGame();
+                            
+                            // Start the game again
+                            this.startGame();
+                        }
+                    }
+                } else {
+                    this.restartButton.unhighlight();
+                }
+            }
+
             if (this.isGameStarted) {
                 // Update the timer if the game is active
                 if (!this.isGamePaused) {
-                    this.timer.update();
+                    const timerFinished = this.timer.update();
+                    
+                    // Check if timer has finished and game is not already over
+                    if (timerFinished && !this.gameOver) {
+                        this.handleGameOver();
+                    }
                     
                     // Update ball movement - add this missing logic
                     const collision = this.ball.update(this.clock.getDelta(), this.playerPaddle, this.aiPaddle);
@@ -1105,6 +1215,7 @@ export class Game {
         this.isGameStarted = false;
         this.isGamePaused = false;
         this.isMultiplayer = false;
+        this.gameOver = false;
         
         // Reset scores
         this.playerScore = 0;
@@ -1236,5 +1347,94 @@ export class Game {
             console.log(`Remote player claimed paddle ${paddleIndex}`);
             this.paddles[paddleIndex].claimOwnership(playerId, isHost);
         }
+    }
+
+    // Add a method to handle game over
+    handleGameOver() {
+        console.log("Game over - timer finished!");
+        this.gameOver = true;
+        
+        // Stop the ball by resetting it and setting velocity to zero
+        if (this.ball) {
+            this.ball.reset();
+            // Ensure the ball doesn't move after reset
+            this.ball.ballVelocity.set(0, 0, 0);
+        }
+        
+        // Show the final score display
+        this.finalScoreDisplay.show(this.playerScore, this.aiScore);
+        
+        // Show the restart button
+        this.restartButton.show();
+        
+        // Play a sound if available
+        if (this.soundManager) {
+            this.soundManager.playScore(); // Using an existing sound for game over
+        }
+        
+        // Trigger haptic feedback for game over
+        this.triggerPaddleHaptics(1.0, 200);
+    }
+
+    // Method to start or restart the game
+    startGame() {
+        console.log("Starting game...");
+        this.isGameStarted = true;
+        
+        // Hide the start button
+        if (this.startButton) {
+            this.startButton.hide();
+        }
+        
+        // Start the timer
+        if (this.timer) {
+            this.timer.start();
+        }
+        
+        // Start the ball movement
+        if (this.ball) {
+            this.ball.start();
+        }
+        
+        // Start background music
+        if (this.soundManager) {
+            this.soundManager.startBackgroundMusic();
+        }
+        
+        console.log("Game started successfully");
+    }
+
+    // Update the handleController method to check for restart button interactions
+    handleController() {
+        // ... existing code ...
+            // Check for restart button interaction when game is over
+            if (this.gameOver && this.restartButton && this.restartButton.isVisible()) {
+                if (this.restartButton.checkIntersection(controller)) {
+                    this.restartButton.highlight();
+                    
+                    // Check for button press (trigger pressed)
+                    if (controller.userData.triggerPressed) {
+                        if (this.restartButton.press()) {
+                            // Play sound if available
+                            if (this.soundManager) {
+                                this.soundManager.playPaddleHit(); // Using an existing sound
+                            }
+                            
+                            // Hide the final score display and restart button
+                            this.finalScoreDisplay.hide();
+                            this.restartButton.hide();
+                            
+                            // Reset the game
+                            this.resetGame();
+                            
+                            // Start the game again
+                            this.startGame();
+                        }
+                    }
+                } else {
+                    this.restartButton.unhighlight();
+                }
+            }
+        // ... existing code ...
     }
 }
