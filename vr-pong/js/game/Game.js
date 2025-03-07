@@ -1001,6 +1001,12 @@ export class Game {
                         if (this.soundManager) {
                             this.soundManager.playScore();
                         }
+                        
+                        // Sync scores in multiplayer mode
+                        if (this.isMultiplayer && this.multiplayerManager && this.isLocalPlayer) {
+                            this.multiplayerManager.updateScore(this.playerScore, this.aiScore);
+                        }
+                        
                         // Start the ball again after short delay
                         setTimeout(() => {
                             if (this.isGameStarted && !this.isGamePaused) {
@@ -1014,6 +1020,12 @@ export class Game {
                         if (this.soundManager) {
                             this.soundManager.playScore();
                         }
+                        
+                        // Sync scores in multiplayer mode
+                        if (this.isMultiplayer && this.multiplayerManager && this.isLocalPlayer) {
+                            this.multiplayerManager.updateScore(this.playerScore, this.aiScore);
+                        }
+                        
                         // Start the ball again after short delay
                         setTimeout(() => {
                             if (this.isGameStarted && !this.isGamePaused) {
