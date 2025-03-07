@@ -325,6 +325,25 @@ export class Game {
                 this.desktopControls.lastMouseX = event.clientX;
                 this.desktopControls.lastMouseY = event.clientY;
             }
+            
+            // Handle mouse hover for multiplayer menu buttons in desktop mode
+            if (!this.isInVR && this.multiplayerMenu && this.multiplayerMenu.isVisible) {
+                // Get the current mouse coordinates
+                const mouseX = this.desktopControls.mouseX;
+                const mouseY = this.desktopControls.mouseY;
+                
+                // Check for menu button intersections
+                const hoverIntersect = this.multiplayerMenu.checkMouseIntersection(mouseX, mouseY, this.camera);
+                
+                // Handle highlighting changes
+                if (hoverIntersect) {
+                    // Highlight new button if not already highlighted
+                    this.multiplayerMenu.highlightButton(hoverIntersect.button);
+                } else if (this.multiplayerMenu.currentHoveredButton) {
+                    // Unhighlight current button if mouse is no longer over any button
+                    this.multiplayerMenu.unhighlightButton(this.multiplayerMenu.currentHoveredButton);
+                }
+            }
         });
 
         // Prevent context menu on right-click

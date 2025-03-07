@@ -18,6 +18,9 @@ export class MultiplayerMenu {
             onBack: null
         };
         
+        // Track currently hovered button
+        this.currentHoveredButton = null;
+        
         // Preload Orbitron font to use in canvas
         this.fontLoaded = false;
         this.preloadOrbitronFont();
@@ -389,6 +392,9 @@ export class MultiplayerMenu {
     highlightButton(buttonKey) {
         if (!this.buttons[buttonKey]) return;
         
+        // Skip if button is already highlighted
+        if (this.currentHoveredButton === buttonKey) return;
+        
         const buttonMesh = this.buttons[buttonKey].children[0];
         buttonMesh.material.color.setHex(buttonMesh.userData.hoverColor);
         buttonMesh.material.emissive.setHex(buttonMesh.userData.hoverColor);
@@ -404,10 +410,14 @@ export class MultiplayerMenu {
         }
         
         buttonMesh.userData.isHighlighted = true;
+        this.currentHoveredButton = buttonKey;
     }
     
     unhighlightButton(buttonKey) {
         if (!this.buttons[buttonKey]) return;
+        
+        // Skip if button is not the currently highlighted one
+        if (this.currentHoveredButton !== buttonKey) return;
         
         const buttonMesh = this.buttons[buttonKey].children[0];
         buttonMesh.material.color.setHex(buttonMesh.userData.originalColor);
@@ -424,6 +434,7 @@ export class MultiplayerMenu {
         }
         
         buttonMesh.userData.isHighlighted = false;
+        this.currentHoveredButton = null;
     }
     
     pressButton(buttonKey) {
@@ -507,5 +518,36 @@ export class MultiplayerMenu {
         }
         
         this.scene.remove(this.menuGroup);
+    }
+    
+    // Method to check for mouse hover
+    checkMouseIntersection(mouseX, mouseY, camera) {
+        if (!this.isVisible) return null;
+        
+        // Skip intersection checks if we're still in the initial delay period
+        const now = Date.now();
+        if (now - this.showTime < this.showDelay) {
+            return null;
+        }
+        
+        // Create a raycaster for mouse picking
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2(mouseX, mouseY);
+        raycaster.setFromCamera(mouse, camera);
+        
+        // Check intersection with each button
+        for (const [key, button] of Object.entries(this.buttons)) {
+            const buttonMesh = button.children[0];
+            const intersects = raycaster.intersectObject(buttonMesh);
+            
+            if (intersects.length > 0) {
+                return {
+                    button: key,
+                    mesh: buttonMesh
+                };
+            }
+        }
+        
+        return null;
     }
 }
