@@ -9,6 +9,7 @@ import { SoundManager } from '../audio/SoundManager.js';
 import { StartButton } from '../ui/StartButton.js';
 import { ScoreDisplay } from '../ui/ScoreDisplay.js';
 import { Timer } from '../ui/Timer.js';
+import { TimerDisplay } from '../ui/TimerDisplay.js';
 import { MultiplayerMenu } from '../ui/MultiplayerMenu.js';
 import { MultiplayerManager } from '../network/MultiplayerManager.js';
 import { RestartButton } from '../ui/RestartButton.js';
@@ -501,7 +502,7 @@ export class Game {
         this.finalScoreDisplay = new FinalScoreDisplay(this.scene);
         
         // Initialize game timer
-        this.timer = new Timer(this.scene, 20); // 20 seconds for debugging (changed from 180)
+        this.timer = new Timer(this.scene, 120); // 120 seconds for the new timer
         
         // Create message display for notifications
         this.messageDisplay = this.createMessageDisplay();
@@ -528,6 +529,19 @@ export class Game {
             new THREE.Vector3(-1.90, 1.5, -1),  // AI score on left wall
             new THREE.Euler(0, Math.PI / 2, 0),
             'YOU'
+        );
+        
+        // Add timer displays above both score displays
+        this.playerTimerDisplay = new TimerDisplay(
+            this.scene,
+            new THREE.Vector3(1.90, 2.2, -1),  // Above player score on right wall
+            new THREE.Euler(0, -Math.PI / 2, 0)
+        );
+        
+        this.aiTimerDisplay = new TimerDisplay(
+            this.scene,
+            new THREE.Vector3(-1.90, 2.2, -1),  // Above AI score on left wall
+            new THREE.Euler(0, Math.PI / 2, 0)
         );
 
         // Create start button
@@ -725,6 +739,10 @@ export class Game {
         // Start the timer and music
         if (this.timer) {
             this.timer.start();
+            
+            // Initialize timer displays with the current time
+            if (this.playerTimerDisplay) this.playerTimerDisplay.updateTime(this.timer.timeLeft);
+            if (this.aiTimerDisplay) this.aiTimerDisplay.updateTime(this.timer.timeLeft);
         }
         
         if (this.soundManager) {
@@ -1120,6 +1138,12 @@ export class Game {
                 if (!this.isGamePaused) {
                     const timerFinished = this.timer.update();
                     
+                    // Update the timer displays with current time remaining
+                    if (this.playerTimerDisplay && this.aiTimerDisplay) {
+                        this.playerTimerDisplay.updateTime(this.timer.timeLeft);
+                        this.aiTimerDisplay.updateTime(this.timer.timeLeft);
+                    }
+                    
                     // Check if timer has finished and game is not already over
                     if (timerFinished && !this.gameOver) {
                         this.handleGameOver();
@@ -1230,6 +1254,10 @@ export class Game {
         
         // Reset timer
         if (this.timer) this.timer.reset();
+        
+        // Reset timer displays
+        if (this.playerTimerDisplay) this.playerTimerDisplay.updateTime(this.timer.timeLeft);
+        if (this.aiTimerDisplay) this.aiTimerDisplay.updateTime(this.timer.timeLeft);
         
         // Reset paddle positions
         if (this.playerPaddle && this.playerPaddle.getPaddle()) {
@@ -1389,6 +1417,10 @@ export class Game {
         // Start the timer
         if (this.timer) {
             this.timer.start();
+            
+            // Initialize timer displays with the current time
+            if (this.playerTimerDisplay) this.playerTimerDisplay.updateTime(this.timer.timeLeft);
+            if (this.aiTimerDisplay) this.aiTimerDisplay.updateTime(this.timer.timeLeft);
         }
         
         // Start the ball movement
