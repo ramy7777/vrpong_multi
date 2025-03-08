@@ -15,6 +15,7 @@ import { MultiplayerManager } from '../network/MultiplayerManager.js';
 import { RestartButton } from '../ui/RestartButton.js';
 import { FinalScoreDisplay } from '../ui/FinalScoreDisplay.js';
 import { HeadModel } from '../player/HeadModel.js';
+import { HandModel } from '../player/HandModel.js';
 
 export class Game {
     constructor() {
@@ -131,6 +132,9 @@ export class Game {
             
             // Create player head model for VR
             this.createPlayerHead();
+            
+            // Create player hand models for VR
+            this.createPlayerHands();
             
             // Ensure the camera is in the playerGroup for locomotion
             if (!this.playerGroup.children.includes(this.camera)) {
@@ -930,6 +934,31 @@ export class Game {
                     }
                 }
                 
+                // Update player hand positions to match controllers
+                if (this.playerHands) {
+                    // Left hand
+                    if (this.playerHands.left && this.vrController.controllers[0]) {
+                        const handPosition = new THREE.Vector3();
+                        const handRotation = new THREE.Quaternion();
+                        
+                        this.vrController.controllers[0].getWorldPosition(handPosition);
+                        this.vrController.controllers[0].getWorldQuaternion(handRotation);
+                        
+                        this.playerHands.left.updatePosition(handPosition, handRotation);
+                    }
+                    
+                    // Right hand
+                    if (this.playerHands.right && this.vrController.controllers[1]) {
+                        const handPosition = new THREE.Vector3();
+                        const handRotation = new THREE.Quaternion();
+                        
+                        this.vrController.controllers[1].getWorldPosition(handPosition);
+                        this.vrController.controllers[1].getWorldQuaternion(handRotation);
+                        
+                        this.playerHands.right.updatePosition(handPosition, handRotation);
+                    }
+                }
+                
                 // Send VR controller data over the network in multiplayer mode
                 if (this.isMultiplayer && this.multiplayerManager && this.multiplayerManager.isMultiplayerActive) {
                     this.multiplayerManager.updateControllerData(
@@ -1382,6 +1411,16 @@ export class Game {
             right: new THREE.Group()
         };
         
+        // Create 3D hand models for remote player
+        this.remoteHands = {
+            left: new HandModel(this.scene, true),  // Left hand
+            right: new HandModel(this.scene, false) // Right hand
+        };
+        
+        // Hide hands initially
+        this.remoteHands.left.hide();
+        this.remoteHands.right.hide();
+        
         // Create basic controller models
         for (const side of ['left', 'right']) {
             // Add controller grip for model
@@ -1425,43 +1464,68 @@ export class Game {
         this.playerHead.hide(); // Initially hidden, only visible to remote players
     }
 
+    // Create the local player's hand models for tracking in VR
+    createPlayerHands() {
+        this.playerHands = {
+            left: new HandModel(this.scene, true),  // Left hand
+            right: new HandModel(this.scene, false) // Right hand
+        };
+        
+        // Hide local hands as they're only visible to remote players
+        this.playerHands.left.hide();
+        this.playerHands.right.hide();
+    }
+
     // Update remote controller visualizations based on network data
     updateRemoteControllers(data) {
-        if (!this.isMultiplayer || !this.remoteControllers) return;
+        if (!this.isMultiplayer) return;
         
-        // Only show remote controllers in multiplayer mode
+        // Only show remote controllers/hands in multiplayer mode
         const isRemotePlayerInVR = (data.isHost !== this.isLocalPlayer);
         if (!isRemotePlayerInVR) return;
         
-        // Make remote controllers visible
-        this.remoteControllers.left.visible = true;
-        this.remoteControllers.right.visible = true;
-        
-        // Update left controller
+        // Update left controller/hand
         if (data.leftController) {
             const position = data.leftController.position;
             const rotation = data.leftController.rotation;
             
-            this.remoteControllers.left.position.set(position.x, position.y, position.z);
-            this.remoteControllers.left.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+            // Update hand model instead of controller rays
+            if (this.remoteHands && this.remoteHands.left) {
+                this.remoteHands.left.show();
+                this.remoteHands.left.updatePosition(position, rotation);
+            }
+            
+            // Keep controllers updated for compatibility but hide them
+            if (this.remoteControllers) {
+                this.remoteControllers.left.visible = false; // Hide ray controller
+                this.remoteControllers.left.position.set(position.x, position.y, position.z);
+                this.remoteControllers.left.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+            }
         }
         
-        // Update right controller
+        // Update right controller/hand
         if (data.rightController) {
             const position = data.rightController.position;
             const rotation = data.rightController.rotation;
             
-            this.remoteControllers.right.position.set(position.x, position.y, position.z);
-            this.remoteControllers.right.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+            // Update hand model instead of controller rays
+            if (this.remoteHands && this.remoteHands.right) {
+                this.remoteHands.right.show();
+                this.remoteHands.right.updatePosition(position, rotation);
+            }
+            
+            // Keep controllers updated for compatibility but hide them
+            if (this.remoteControllers) {
+                this.remoteControllers.right.visible = false; // Hide ray controller
+                this.remoteControllers.right.position.set(position.x, position.y, position.z);
+                this.remoteControllers.right.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+            }
         }
         
         // Update remote head if data is available
         if (data.head && this.remoteHead) {
-            console.log("Updating remote head position:", data.head.position);
             this.remoteHead.show(); // Make the head visible
             this.remoteHead.updatePosition(data.head.position, data.head.rotation);
-        } else if (this.remoteHead) {
-            console.log("No head data received or remoteHead not created");
         }
     }
 
