@@ -56,6 +56,26 @@ const io = socketIo(server);
 io.on('connection', (socket) => {
     console.log(`User connected: ${socket.id}`);
     
+    // Voice chat signaling events
+    socket.on('voice-signal', (data) => {
+        console.log(`Voice signal from ${socket.id} to ${data.to}`);
+        if (data.to) {
+            socket.to(data.to).emit('voice-signal', {
+                from: socket.id,
+                signal: data.signal
+            });
+        }
+    });
+    
+    socket.on('voice-request', (data) => {
+        console.log(`Voice request from ${socket.id} to ${data.to}`);
+        if (data.to) {
+            socket.to(data.to).emit('voice-request', {
+                from: socket.id
+            });
+        }
+    });
+    
     // Host a new game
     socket.on('hostGame', () => {
         // Check if already hosting a game

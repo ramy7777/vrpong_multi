@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { VRButton } from 'webxr';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { VoiceChatControls } from './js/ui/VoiceChatControls.js';
 
 class VRPongGame {
     constructor() {
@@ -28,6 +29,9 @@ class VRPongGame {
             right: { touching: false, gripping: false, lastPosition: new THREE.Vector3(), thumbstickPressed: false }
         };
 
+        // Voice chat UI
+        this.voiceChatControls = null;
+        
         this.init();
         this.setupVR();
         this.createEnvironment();
@@ -407,6 +411,37 @@ class VRPongGame {
         }
     }
 
+    // Initialize multiplayer
+    initMultiplayer() {
+        import('./js/network/MultiplayerManager.js').then(module => {
+            const MultiplayerManager = module.MultiplayerManager;
+            this.multiplayerManager = new MultiplayerManager(this);
+            
+            // Initialize voice chat controls when multiplayer is active
+            this.voiceChatControls = new VoiceChatControls(this.scene, this.multiplayerManager);
+        });
+    }
+
+    // Show voice chat controls when in multiplayer game
+    showVoiceChatControls() {
+        if (this.voiceChatControls && this.multiplayerManager) {
+            const isInMultiplayerGame = this.multiplayerManager.isMultiplayerActive;
+            const hasOpponent = this.multiplayerManager.opponentId !== null;
+            
+            if (isInMultiplayerGame && hasOpponent) {
+                console.log('Showing voice chat controls');
+                this.voiceChatControls.show();
+            }
+        }
+    }
+
+    // Hide voice chat controls
+    hideVoiceChatControls() {
+        if (this.voiceChatControls) {
+            this.voiceChatControls.hide();
+        }
+    }
+
     animate() {
         this.renderer.setAnimationLoop(() => {
             const session = this.renderer.xr.getSession();
@@ -417,6 +452,25 @@ class VRPongGame {
                 if (this.controllers[1]) this.checkControllerState(this.controllers[1], 'right');
             }
 
+            // Update multiplayer state if active
+            if (this.multiplayerManager) {
+                this.multiplayerManager.update();
+                
+                // Show voice chat controls if in a multiplayer game
+                if (this.multiplayerManager.isMultiplayerActive) {
+                    if (this.multiplayerManager.opponentId) {
+                        this.showVoiceChatControls();
+                    }
+                } else {
+                    this.hideVoiceChatControls();
+                }
+            }
+            
+            // Update voice chat controls
+            if (this.voiceChatControls) {
+                this.voiceChatControls.update(this.controllers);
+            }
+
             this.updateBall();
             this.renderer.render(this.scene, this.camera);
         });
@@ -424,4 +478,11 @@ class VRPongGame {
 }
 
 // Start the game
-new VRPongGame();
+document.addEventListener('DOMContentLoaded', () => {
+    const game = new VRPongGame();
+    
+    // Initialize multiplayer after a short delay to ensure the scene is ready
+    setTimeout(() => {
+        game.initMultiplayer();
+    }, 1000);
+});

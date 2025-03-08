@@ -192,6 +192,32 @@
     </style>
     <!-- Include Socket.IO client library from CDN -->
     <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
+    <!-- Import simple-peer as a global variable -->
+    <script>
+        // Load SimplePeer script
+        function loadSimplePeer() {
+            return new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = 'https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js';
+                script.onload = () => {
+                    console.log('SimplePeer library loaded successfully');
+                    resolve();
+                };
+                script.onerror = () => {
+                    console.error('Failed to load SimplePeer library');
+                    reject(new Error('Failed to load SimplePeer library'));
+                };
+                document.head.appendChild(script);
+            });
+        }
+        
+        // Load the script when the page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            loadSimplePeer().catch(err => {
+                console.error('Error loading SimplePeer:', err);
+            });
+        });
+    </script>
 </head>
 <body>
     <!-- Background overlay for depth -->

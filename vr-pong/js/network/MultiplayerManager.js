@@ -1,5 +1,6 @@
 // Use the global io from socket.io CDN
 import * as THREE from 'three';
+import { VoiceChat } from '../audio/VoiceChat.js';
 
 export class MultiplayerManager {
     constructor(game) {
@@ -38,6 +39,9 @@ export class MultiplayerManager {
             this.isConnected = false;
             this.isMultiplayerActive = false;
             this.opponentId = null;
+            
+            // Initialize voice chat
+            this.voiceChat = null;
             
             this.setupSocketListeners();
         } catch (e) {
@@ -97,20 +101,38 @@ export class MultiplayerManager {
                 this.roomId = data.roomId;
                 this.isMultiplayerActive = true;
                 this.game.updateMultiplayerStatus(true, false);
-            }
-            
-            if (this.isHost) {
+                // As a guest, our opponent is the host
+                this.opponentId = data.hostId;
+                console.log('As guest, joined host with ID:', this.opponentId);
+                this.game.showMessage('Joined game successfully! Waiting for the host to start...', 5000);
+            } else {
+                // As a host, our opponent is the guest
                 this.opponentId = data.guestId;
-                console.log('As host, opponent joined with ID:', this.opponentId);
+                console.log('As host, opponent (guest) joined with ID:', this.opponentId);
                 this.game.showMessage('A player has joined your game! You can now start the game.', 5000);
                 // Show the start button for the host
                 if (this.game.startButton) {
                     this.game.startButton.show();
                 }
+            }
+            
+            // Only initialize voice chat if we have a valid opponent ID
+            if (this.opponentId) {
+                console.log('OpponentId is now set to:', this.opponentId);
+                
+                // Initialize voice chat when a player joins
+                if (!this.voiceChat) {
+                    console.log('Initializing voice chat with opponent:', this.opponentId);
+                    this.voiceChat = new VoiceChat(this);
+                }
+                
+                // Wait a bit to let the game UI update before requesting voice chat
+                setTimeout(() => {
+                    console.log('Requesting voice chat with opponent:', this.opponentId);
+                    this.voiceChat.requestVoiceChat();
+                }, 2000);
             } else {
-                this.opponentId = data.hostId;
-                console.log('As guest, joined host with ID:', this.opponentId);
-                this.game.showMessage('Joined game successfully! Waiting for the host to start...', 5000);
+                console.error('OpponentId is undefined, cannot initialize voice chat');
             }
         });
 
@@ -214,6 +236,23 @@ export class MultiplayerManager {
             // Removed paddle ownership log
             // console.log(`Received paddle ownership update: Paddle ${data.paddleIndex} claimed by ${data.isHost ? 'Host' : 'Guest'}`);
             this.game.updateRemotePaddleOwnership(data.paddleIndex, data.ownerId, data.isHost);
+        });
+
+        // When a player leaves
+        this.socket.on('playerLeft', () => {
+            console.log('Player left the game');
+            
+            // Clean up voice chat when a player leaves
+            if (this.voiceChat) {
+                console.log('Cleaning up voice chat resources due to player disconnect');
+                this.voiceChat.cleanup();
+                this.voiceChat = null;
+            }
+            
+            this.opponentId = null;
+            // Reset multiplayer state
+            this.isMultiplayerActive = false;
+            this.game.showMessage('The other player has left the game', 3000);
         });
     }
 
@@ -528,5 +567,31 @@ export class MultiplayerManager {
                         'ballVelocity =', this.game.ball ? this.game.ball.ballVelocity : 'n/a',
                         'scores =', this.game.playerScore, this.game.aiScore);
         }, 500);
+    }
+
+    // Update method
+    update() {
+        // Update voice chat if active
+        if (this.voiceChat) {
+            this.voiceChat.update();
+        }
+    }
+    
+    // Toggle mute status
+    toggleMute() {
+        if (this.voiceChat) {
+            return this.voiceChat.toggleMute();
+        }
+        return false;
+    }
+    
+    // Check if voice chat is connected
+    isVoiceChatConnected() {
+        return this.voiceChat && this.voiceChat.isConnected;
+    }
+    
+    // Check if microphone is muted
+    isMicrophoneMuted() {
+        return this.voiceChat ? this.voiceChat.isMuted : false;
     }
 }
