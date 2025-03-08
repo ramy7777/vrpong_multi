@@ -16,6 +16,7 @@ import { RestartButton } from '../ui/RestartButton.js';
 import { FinalScoreDisplay } from '../ui/FinalScoreDisplay.js';
 import { HeadModel } from '../player/HeadModel.js';
 import { HandModel } from '../player/HandModel.js';
+import { MobileController } from '../controllers/MobileController.js';
 
 export class Game {
     constructor() {
@@ -28,80 +29,77 @@ export class Game {
         this.renderer.xr.enabled = true;
         document.body.appendChild(this.renderer.domElement);
         document.body.appendChild(VRButton.createButton(this.renderer));
-
-        // Initialize game elements
-        this.paddleLeft = null;
-        this.paddleRight = null;
-        this.ball = null;
-        this.gameEnv = null;
-        this.startButton = null;
+        this.clock = new THREE.Clock();
         
-        // Game state variables
+        // Add event emitter functionality
+        this.eventListeners = {};
+        
+        // Create a group for the player (camera + controllers)
+        this.playerGroup = new THREE.Group();
+        this.scene.add(this.playerGroup);
+        
+        // Game state
         this.isGameStarted = false;
         this.isInVR = false;
         this.isMultiplayer = false;
-        this.scoreHost = 0;
-        this.scoreGuest = 0;
-        this.scoreDisplay = null;
-        this.timer = null;
-        this.secondsPassed = 0;
-        this.multiplayerMenu = null;
-        this.gameOver = false;
+        this.isLocalPlayer = true; // By default, we're the local player
+        this.playerId = Math.random().toString(36).substring(2, 15); // Generate a random ID
         
-        // Desktop Controls
+        // Desktop controls
         this.desktopControls = {
             keys: {
                 'ArrowLeft': false,
                 'ArrowRight': false,
+                'ArrowUp': false,
+                'ArrowDown': false,
                 'a': false,
                 'd': false,
-                'A': false,
-                'D': false,
-                ' ': false,
+                'w': false,
+                's': false,
+                ' ': false
             },
-            isMouseDown: false,
             mouseX: 0,
             mouseY: 0,
-            isRightMouseDown: false, // Track right mouse button for camera rotation
-            lastMouseX: 0, // Track last mouse position for camera rotation
+            isMouseDown: false,
+            isRightMouseDown: false,
+            lastMouseX: 0,
             lastMouseY: 0
         };
         
-        // Game state
-        this.isGameStarted = false;
-        this.isMultiplayer = false;
-        this.isLocalPlayer = true; // Player is host by default
-        this.isInVR = false; // Track if user is in VR
+        // Initialize controllers
+        this.vrController = null;
+        this.mobileController = null;
         
-        // Button interaction state tracking
-        this.lastButtonPressController = null;
-        this.lastButtonPressTime = 0;
+        // Initialize game elements
+        this.environment = null;
+        this.playerPaddle = null;
+        this.aiPaddle = null;
+        this.ball = null;
+        this.paddles = [];
         
-        // Scoring
-        this.playerScore = 0;
-        this.aiScore = 0;
+        // Initialize UI elements
+        this.startButton = null;
+        this.scoreDisplay = null;
+        this.timer = null;
+        this.timerDisplay = null;
+        this.multiplayerMenu = null;
+        this.restartButton = null;
+        this.finalScoreDisplay = null;
         
-        // Clock for animation
-        this.clock = new THREE.Clock();
+        // Initialize multiplayer manager
+        this.multiplayerManager = new MultiplayerManager(this);
         
-        // Create a group for player elements
-        this.playerGroup = new THREE.Group();
-        this.scene.add(this.playerGroup);
-        
-        // For desktop mode, camera is in the scene
-        // For VR mode, camera will be moved to playerGroup
-        this.scene.add(this.camera);
-        
+        // Initialize the game
         this.init();
         this.createGameElements();
         this.setupVR();
         this.setupDesktopControls();
         
-        // Initialize multiplayer manager
-        this.multiplayerManager = new MultiplayerManager(this);
-        
         // Set up multiplayer menu callbacks (will create the menu)
         this.setupMultiplayerCallbacks();
+        
+        // Initialize mobile controller if needed
+        this.detectAndSetupMobileControls();
         
         this.animate();
     }
@@ -1004,6 +1002,11 @@ export class Game {
                 paddle.position.x = paddleX;
             }
 
+            // Update mobile controller if available
+            if (this.mobileController) {
+                this.mobileController.update();
+            }
+
             // For VR mode, ensure controller inputs are properly handled
             if (this.isInVR && this.vrController) {
                 const session = this.renderer.xr.getSession();
@@ -1153,7 +1156,7 @@ export class Game {
                                 } else {
                                     console.log("Controller has NOT been released since button press, waiting for release");
                                 }
-                            }, 300); // Wait for button animation to complete
+                            }, 300);
                         }
                     }
                 } else {
@@ -1317,6 +1320,7 @@ export class Game {
                 }
             }
 
+            // Render the scene
             this.renderer.render(this.scene, this.camera);
         });
     }
@@ -1581,86 +1585,63 @@ export class Game {
 
     // Method to start or restart the game
     startGame() {
-        console.log("Starting game...");
+        if (this.isGameStarted) return;
+        
+        console.log("Starting game");
         this.isGameStarted = true;
         
-        // Hide the start button
+        // Hide start button
         if (this.startButton) {
             this.startButton.hide();
         }
         
-        // Start the timer
+        // Reset scores
+        this.playerScore = 0;
+        this.aiScore = 0;
+        
+        // Reset and start timer
         if (this.timer) {
+            this.timer.reset();
             this.timer.start();
-            
-            // Initialize timer displays with the current time
-            if (this.playerTimerDisplay) this.playerTimerDisplay.updateTime(this.timer.timeLeft);
-            if (this.aiTimerDisplay) this.aiTimerDisplay.updateTime(this.timer.timeLeft);
         }
         
-        // Start the ball movement
+        // Reset and start ball
         if (this.ball) {
-            this.ball.start();
+            this.ball.reset();
+            setTimeout(() => {
+                this.ball.start();
+            }, 1000);
         }
         
-        // Start background music
-        if (this.soundManager) {
-            this.soundManager.startBackgroundMusic();
-        }
+        // Reset game over state
+        this.gameOver = false;
         
-        console.log("Game started successfully");
+        // Emit gameStarted event for mobile controls
+        this.emit('gameStarted');
     }
 
-    // Update the handleController method to check for restart button interactions
-    handleController() {
-        // ... existing code ...
-            // Check for restart button interaction when game is over
-            if (this.gameOver && this.restartButton && this.restartButton.isVisible()) {
-                if (this.restartButton.checkIntersection(controller)) {
-                    this.restartButton.highlight();
-                    
-                    // Check for button press (trigger pressed)
-                    if (controller.userData.triggerPressed) {
-                        if (this.restartButton.press()) {
-                            // Play sound if available
-                            if (this.soundManager) {
-                                this.soundManager.playPaddleHit(); // Using an existing sound
-                            }
-                            
-                            // For multiplayer games, use the MultiplayerManager to restart
-                            if (this.isMultiplayer && this.multiplayerManager) {
-                                console.log("Using MultiplayerManager to restart the game");
-                                
-                                // Hide UI locally immediately for better user feedback
-                                this.finalScoreDisplay.hide();
-                                this.restartButton.hide();
-                                
-                                // Send restart request to server via MultiplayerManager
-                                const restartSent = this.multiplayerManager.restartGame();
-                                
-                                if (restartSent) {
-                                    this.showMessage("Restarting game for all players...", 3000);
-                                } else {
-                                    // If restart failed, show error message
-                                    this.showMessage("Failed to restart the game!", 3000);
-                                    
-                                    // Show the UI elements again 
-                                    this.finalScoreDisplay.show(this.playerScore, this.aiScore);
-                                    this.restartButton.show();
-                                }
-                            } else {
-                                // For single player, reset and start locally
-                                this.finalScoreDisplay.hide();
-                                this.restartButton.hide();
-                                this.resetGame();
-                                this.startGame();
-                            }
-                        }
-                    }
-                } else {
-                    this.restartButton.unhighlight();
-                }
-            }
-        // ... existing code ...
+    // Event emitter methods
+    addEventListener(event, callback) {
+        if (!this.eventListeners[event]) {
+            this.eventListeners[event] = [];
+        }
+        this.eventListeners[event].push(callback);
+    }
+    
+    removeEventListener(event, callback) {
+        if (this.eventListeners[event]) {
+            this.eventListeners[event] = this.eventListeners[event].filter(cb => cb !== callback);
+        }
+    }
+    
+    emit(event, ...args) {
+        if (this.eventListeners[event]) {
+            this.eventListeners[event].forEach(callback => callback(...args));
+        }
+    }
+    
+    detectAndSetupMobileControls() {
+        // Initialize mobile controller
+        this.mobileController = new MobileController(this);
     }
 }
