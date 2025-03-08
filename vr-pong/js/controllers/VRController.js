@@ -14,7 +14,7 @@ export class VRController {
         
         // Movement and rotation settings
         this.moveSpeed = 0.05;
-        this.snapAngle = 25 * (Math.PI / 180); // 25 degrees in radians
+        this.snapAngle = 15 * (Math.PI / 180); // 15 degrees in radians (changed from 25)
         this.rotationCooldownTime = 250; // milliseconds
         this.lastRotationTime = 0;
 
@@ -283,28 +283,45 @@ export class VRController {
     handleMovement(thumbstickX, thumbstickY, gamepad) {
         // Only process movement if thumbstick is moved beyond deadzone
         if (Math.abs(thumbstickX) > 0.05 || Math.abs(thumbstickY) > 0.05) {
-            // Apply exponential control for finer movement at lower thumbstick values
+            // Keep moveX as is for left/right, but invert the sign of moveZ for forward/backward
             const moveX = Math.sign(thumbstickX) * Math.pow(Math.abs(thumbstickX), 1.5) * this.moveSpeed;
-            const moveZ = -Math.sign(thumbstickY) * Math.pow(Math.abs(thumbstickY), 1.5) * this.moveSpeed;
+            const moveZ = Math.sign(thumbstickY) * Math.pow(Math.abs(thumbstickY), 1.5) * this.moveSpeed; // Removed negative sign
 
-            // Get the player's forward direction but constrain it to the XZ plane
-            const forward = new THREE.Vector3(0, 0, -1);
-            forward.applyQuaternion(this.playerGroup.quaternion);
+            // Get the camera's forward direction (not the player group's)
+            const camera = this.playerGroup.children.find(child => child.isCamera);
+            
+            // Create a world forward vector that points in negative Z
+            const worldForward = new THREE.Vector3();
+            // Create a world right vector that points in positive X
+            const worldRight = new THREE.Vector3();
+            
+            if (camera) {
+                // Critical change: Use getWorldDirection to get the ACTUAL world direction
+                // This accounts for both camera rotation AND player group rotation
+                camera.getWorldDirection(worldForward);
+                worldForward.negate(); // Camera looks at -Z, so negate for forward direction
+                
+                // Compute world right by crossing world up with world forward
+                const worldUp = new THREE.Vector3(0, 1, 0);
+                worldRight.crossVectors(worldUp, worldForward).normalize();
+            } else {
+                // Fallback to player group orientation if camera not found
+                worldForward.set(0, 0, -1).applyQuaternion(this.playerGroup.quaternion);
+                worldRight.set(1, 0, 0).applyQuaternion(this.playerGroup.quaternion);
+            }
+            
             // Force Y component to zero to ensure horizontal movement only
-            forward.y = 0;
-            forward.normalize(); // Re-normalize after changing Y
-
-            // Calculate right vector (perpendicular to forward)
-            const right = new THREE.Vector3(1, 0, 0);
-            right.applyQuaternion(this.playerGroup.quaternion);
-            // Force Y component to zero to ensure horizontal movement only
-            right.y = 0;
-            right.normalize(); // Re-normalize after changing Y
+            worldForward.y = 0;
+            worldForward.normalize(); // Re-normalize after changing Y
+            
+            // Force Y component to zero for right vector as well
+            worldRight.y = 0;
+            worldRight.normalize(); // Re-normalize after changing Y
 
             // Calculate the movement vector in world space (constrained to XZ plane)
             const movement = new THREE.Vector3();
-            movement.addScaledVector(right, moveX);
-            movement.addScaledVector(forward, moveZ);
+            movement.addScaledVector(worldRight, moveX);
+            movement.addScaledVector(worldForward, moveZ);
 
             // Ensure no vertical movement by explicitly setting Y to 0
             // This guarantees we move only along the floor plane
@@ -329,9 +346,24 @@ export class VRController {
             // Store current Y position to preserve height after rotation
             const currentY = this.playerGroup.position.y;
             
-            // Apply rotation around the Y axis only
-            const rotationDirection = Math.sign(thumbstickX);
-            this.playerGroup.rotateY(-this.snapAngle * rotationDirection);
+            // Get camera reference
+            const camera = this.playerGroup.children.find(child => child.isCamera);
+            
+            if (camera) {
+                // Apply rotation around the Y axis only
+                const rotationDirection = Math.sign(thumbstickX);
+                
+                // Rotate the player group (which includes the camera)
+                this.playerGroup.rotateY(-this.snapAngle * rotationDirection);
+                
+                console.log('Snap rotation applied: ' + 
+                            (rotationDirection > 0 ? 'right ' : 'left ') + 
+                            (this.snapAngle * 180 / Math.PI).toFixed(0) + ' degrees');
+            } else {
+                // Standard rotation if camera not found (fallback)
+                const rotationDirection = Math.sign(thumbstickX);
+                this.playerGroup.rotateY(-this.snapAngle * rotationDirection);
+            }
             
             // Restore original Y position to prevent any height changes during rotation
             this.playerGroup.position.y = currentY;
