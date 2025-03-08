@@ -391,6 +391,29 @@ export class MultiplayerManager {
         const rightRotation = new THREE.Quaternion();
         rightController.getWorldPosition(rightPosition);
         rightController.getWorldQuaternion(rightRotation);
+        
+        // Get head position - try multiple approaches to ensure we have the most accurate data
+        let headPosition = null;
+        let headRotation = null;
+        
+        // Approach 1: Use the player's VR camera directly for most accurate position
+        if (this.game && this.game.camera && this.game.renderer.xr.isPresenting) {
+            headPosition = new THREE.Vector3();
+            headRotation = new THREE.Quaternion();
+            
+            // Camera's world position includes player movement from locomotion
+            this.game.camera.getWorldPosition(headPosition);
+            this.game.camera.getWorldQuaternion(headRotation);
+        } 
+        // Approach 2: Use the player head object if available
+        else if (this.game && this.game.playerHead && this.game.playerHead.getHeadGroup()) {
+            headPosition = new THREE.Vector3();
+            headRotation = new THREE.Quaternion();
+            
+            const headGroup = this.game.playerHead.getHeadGroup();
+            headGroup.getWorldPosition(headPosition);
+            headGroup.getWorldQuaternion(headRotation);
+        }
 
         const controllerData = {
             roomId: this.roomId,
@@ -404,6 +427,14 @@ export class MultiplayerManager {
                 rotation: { x: rightRotation.x, y: rightRotation.y, z: rightRotation.z, w: rightRotation.w }
             }
         };
+        
+        // Add head data if available
+        if (headPosition && headRotation) {
+            controllerData.head = {
+                position: { x: headPosition.x, y: headPosition.y, z: headPosition.z },
+                rotation: { x: headRotation.x, y: headRotation.y, z: headRotation.z, w: headRotation.w }
+            };
+        }
         
         // Send controller data to server
         this.socket.emit('updateControllerData', controllerData);

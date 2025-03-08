@@ -368,14 +368,15 @@ io.on('connection', (socket) => {
     
     // Handle VR controller data
     socket.on('updateControllerData', (data) => {
-        const { roomId, isHost, leftController, rightController } = data;
+        const { roomId, isHost, leftController, rightController, head } = data;
         
         if (gameRooms[roomId]) {
             // Broadcast controller data to the other player in the room
             socket.to(roomId).emit('remoteControllerData', {
                 isHost,
                 leftController,
-                rightController
+                rightController,
+                head  // Include head data if available
             });
         }
     });

@@ -14,6 +14,7 @@ import { MultiplayerMenu } from '../ui/MultiplayerMenu.js';
 import { MultiplayerManager } from '../network/MultiplayerManager.js';
 import { RestartButton } from '../ui/RestartButton.js';
 import { FinalScoreDisplay } from '../ui/FinalScoreDisplay.js';
+import { HeadModel } from '../player/HeadModel.js';
 
 export class Game {
     constructor() {
@@ -128,6 +129,9 @@ export class Game {
         this.renderer.xr.addEventListener('sessionstart', () => {
             console.log('Setting up VR session');
             
+            // Create player head model for VR
+            this.createPlayerHead();
+            
             // Ensure the camera is in the playerGroup for locomotion
             if (!this.playerGroup.children.includes(this.camera)) {
                 // Reset position for VR
@@ -149,6 +153,11 @@ export class Game {
                 
                 console.log('Camera attached to player group for VR locomotion facing the table');
             }
+
+            // In VR, we need to create our controller helpers
+            if (!this.vrController) {
+                this.vrController = new VRController(this.renderer, this.playerGroup);
+            }
             
             // Store initial Y position to help maintain consistent floor height
             this.initialFloorHeight = this.playerGroup.position.y;
@@ -166,9 +175,6 @@ export class Game {
             this.camera.position.set(0, 1.7, 0.8);
             this.camera.lookAt(0, 0.9, -1.0);
         });
-
-        // Initialize VR controllers
-        this.vrController = new VRController(this.renderer, this.playerGroup);
     }
 
     setupMultiplayerCallbacks() {
@@ -907,6 +913,23 @@ export class Game {
                     this.isLocalPlayer  // isHost
                 );
                 
+                // Update the player's head position to match the camera
+                if (this.playerHead && this.camera) {
+                    const headPosition = new THREE.Vector3();
+                    const headRotation = new THREE.Quaternion();
+                    
+                    // Get the XR camera and its position
+                    if (this.renderer.xr.isPresenting) {
+                        // The camera is in the player group, so its world position already includes
+                        // any movement from the thumbstick locomotion
+                        this.camera.getWorldPosition(headPosition);
+                        this.camera.getWorldQuaternion(headRotation);
+                        
+                        // Set the player head to match the camera's world position
+                        this.playerHead.updatePosition(headPosition, headRotation);
+                    }
+                }
+                
                 // Send VR controller data over the network in multiplayer mode
                 if (this.isMultiplayer && this.multiplayerManager && this.multiplayerManager.isMultiplayerActive) {
                     this.multiplayerManager.updateControllerData(
@@ -1390,6 +1413,16 @@ export class Game {
             // Add to remote controller group
             this.remoteControllerGroup.add(this.remoteControllers[side]);
         }
+        
+        // Create the remote player's head model
+        this.remoteHead = new HeadModel(this.scene);
+        this.remoteHead.hide(); // Initially hidden
+    }
+
+    // Create the local player's head model for tracking in VR
+    createPlayerHead() {
+        this.playerHead = new HeadModel(this.scene);
+        this.playerHead.hide(); // Initially hidden, only visible to remote players
     }
 
     // Update remote controller visualizations based on network data
@@ -1408,6 +1441,7 @@ export class Game {
         if (data.leftController) {
             const position = data.leftController.position;
             const rotation = data.leftController.rotation;
+            
             this.remoteControllers.left.position.set(position.x, position.y, position.z);
             this.remoteControllers.left.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
         }
@@ -1416,8 +1450,18 @@ export class Game {
         if (data.rightController) {
             const position = data.rightController.position;
             const rotation = data.rightController.rotation;
+            
             this.remoteControllers.right.position.set(position.x, position.y, position.z);
             this.remoteControllers.right.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+        }
+        
+        // Update remote head if data is available
+        if (data.head && this.remoteHead) {
+            console.log("Updating remote head position:", data.head.position);
+            this.remoteHead.show(); // Make the head visible
+            this.remoteHead.updatePosition(data.head.position, data.head.rotation);
+        } else if (this.remoteHead) {
+            console.log("No head data received or remoteHead not created");
         }
     }
 
