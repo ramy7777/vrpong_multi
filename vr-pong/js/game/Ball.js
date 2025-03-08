@@ -288,6 +288,9 @@ export class Ball {
             this.ballVelocity.x *= -1;
             // Ensure minimum speed after wall collision
             this.ensureMinimumSpeed();
+            
+            // Return wall collision for haptic feedback
+            return 'wall';
         }
 
         // Check paddle collision flags

@@ -147,20 +147,25 @@ export class MobileController {
     
     setupHapticFeedback() {
         // Listen for game events to provide haptic feedback
-        this.game.addEventListener('paddleHit', () => {
+        this.game.addEventListener('paddleHit', (data) => {
+            console.log("Paddle hit event received:", data);
             this.triggerHapticFeedback('medium');
             console.log("Paddle hit haptic triggered");
         });
         
-        this.game.addEventListener('wallHit', () => {
+        this.game.addEventListener('wallHit', (data) => {
+            console.log("Wall hit event received:", data);
             this.triggerHapticFeedback('weak');
             console.log("Wall hit haptic triggered");
         });
         
-        this.game.addEventListener('score', () => {
+        this.game.addEventListener('score', (data) => {
+            console.log("Score event received:", data);
             this.triggerHapticFeedback('strong');
             console.log("Score haptic triggered");
         });
+        
+        console.log("Haptic feedback events registered");
     }
     
     styleTouchButton(button) {

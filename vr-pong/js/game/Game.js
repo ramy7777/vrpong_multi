@@ -1260,6 +1260,17 @@ export class Game {
                                 this.soundManager.playPaddleHit();
                             }
                             this.triggerPaddleHaptics(0.7, 50);
+                            
+                            // Emit paddle hit event for haptic feedback on mobile
+                            this.emit('paddleHit', { side: collision });
+                        } else if (collision === 'wall') {
+                            // Play wall bounce sound
+                            if (this.soundManager) {
+                                this.soundManager.playWallBounce();
+                            }
+                            
+                            // Emit wall hit event for haptic feedback on mobile
+                            this.emit('wallHit', { position: 'wall' });
                         } else if (collision === 'player_score') {
                             // AI scored
                             this.aiScore++;
@@ -1334,7 +1345,7 @@ export class Game {
                             }
                             
                             // Emit wall hit event for haptic feedback
-                            this.emit('wallHit', { position: collision });
+                            this.emit('wallHit', { position: 'wall' });
                             
                             // Send collision event in multiplayer
                             if (this.isMultiplayer && this.multiplayerManager) {
@@ -1686,6 +1697,7 @@ export class Game {
     }
     
     emit(event, ...args) {
+        console.log(`Emitting event: ${event}`, args);
         if (this.eventListeners[event]) {
             this.eventListeners[event].forEach(callback => callback(...args));
         }
