@@ -22,23 +22,61 @@ export class VoiceChat {
         this.isConnected = false;
         this.isMuted = false;
         
-        // Analyser nodes for visualizing audio
-        this.localAnalyser = null;
-        this.remoteAnalyser = null;
-        this.localAnalyserData = null;
-        this.remoteAnalyserData = null;
-        
-        // UI elements for voice visualization
-        this.localVoiceIndicator = null;
-        this.remoteVoiceIndicator = null;
-        
         // Connection state tracking
         this.connectionAttempts = 0;
         this.maxReconnectAttempts = 3;
         this.reconnectTimeout = null;
         this.lastConnectionTime = 0;
+        this.permissionRequested = false;
+        
+        // Add mute button to the browser UI
+        this.addMuteButton();
         
         this.setupSocketListeners();
+    }
+    
+    // Add a mute/unmute button to the browser UI
+    addMuteButton() {
+        // Create a floating button in the corner of the screen
+        const button = document.createElement('button');
+        button.id = 'voice-chat-mute-button';
+        button.innerHTML = '🎤';
+        button.title = 'Mute/Unmute Voice Chat';
+        
+        // Style the button
+        Object.assign(button.style, {
+            position: 'fixed',
+            bottom: '20px',
+            right: '20px',
+            width: '50px',
+            height: '50px',
+            borderRadius: '25px',
+            backgroundColor: '#4CAF50',
+            color: 'white',
+            fontSize: '24px',
+            border: 'none',
+            cursor: 'pointer',
+            zIndex: '1000',
+            boxShadow: '0 4px 8px rgba(0, 0, 0, 0.2)'
+        });
+        
+        // Add click handler
+        button.addEventListener('click', () => {
+            this.toggleMute();
+            
+            // Update button appearance
+            if (this.isMuted) {
+                button.innerHTML = '🔇';
+                button.style.backgroundColor = '#F44336';
+            } else {
+                button.innerHTML = '🎤';
+                button.style.backgroundColor = '#4CAF50';
+            }
+        });
+        
+        // Add to document
+        document.body.appendChild(button);
+        this.muteButton = button;
     }
     
     // Set up socket event listeners for WebRTC signaling
@@ -136,15 +174,31 @@ export class VoiceChat {
         
         try {
             console.log('Requesting microphone access...');
-            // Request access to microphone
-            this.stream = await navigator.mediaDevices.getUserMedia({ 
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true
-                },
-                video: false 
-            });
+            
+            // Display a message to inform the user about the permission request
+            this.game.showMessage('Please allow microphone access for voice chat');
+            this.permissionRequested = true;
+            
+            // Special handling for mobile browsers
+            if (/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)) {
+                console.log('Mobile device detected, using simplified audio constraints');
+                
+                // For mobile, use simpler constraints that are more likely to work
+                this.stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: true,
+                    video: false 
+                });
+            } else {
+                // For desktop, use more specific constraints
+                this.stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    },
+                    video: false 
+                });
+            }
             
             console.log('Microphone access granted');
             const audioTrack = this.stream.getAudioTracks()[0];
@@ -154,18 +208,36 @@ export class VoiceChat {
             // Ensure audio tracks are enabled
             this.enableAllAudioTracks();
             
-            // Set up audio context and analyzer
+            // Set up audio context
             this.setupAudioContext();
+            
+            // Hide any permission prompts
+            if (this.permissionRequested) {
+                this.game.showMessage('Voice chat connected');
+                this.permissionRequested = false;
+            }
             
             return true;
         } catch (err) {
             console.error('Error accessing microphone:', err);
-            this.game.showMessage('Could not access microphone. Voice chat disabled.');
+            
+            // Show a more specific error message based on the error
+            if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                this.game.showMessage('Microphone access denied. Please check your browser settings.', 5000);
+            } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+                this.game.showMessage('No microphone found. Please connect a microphone.', 5000);
+            } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+                this.game.showMessage('Could not access microphone. It may be in use by another app.', 5000);
+            } else {
+                this.game.showMessage('Could not access microphone. Voice chat disabled.', 5000);
+            }
+            
+            this.permissionRequested = false;
             return false;
         }
     }
     
-    // Set up Web Audio API context and analyzers
+    // Set up Web Audio API context 
     setupAudioContext() {
         if (!this.stream) return;
         
@@ -173,90 +245,8 @@ export class VoiceChat {
         this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
         console.log('Audio context created: sampleRate:', this.audioContext.sampleRate, 'state:', this.audioContext.state);
         
-        // Create analyzer for local audio (microphone)
-        this.localAnalyser = this.audioContext.createAnalyser();
-        this.localAnalyser.fftSize = 32;
-        this.localAnalyserData = new Uint8Array(this.localAnalyser.frequencyBinCount);
-        console.log('Local analyzer created with frequency bins:', this.localAnalyser.frequencyBinCount);
-        
-        // Create a source from the microphone stream
-        const micSource = this.audioContext.createMediaStreamSource(this.stream);
-        micSource.connect(this.localAnalyser);
-        
-        // Setup remote analyzer (will connect when peer established)
-        this.remoteAnalyser = this.audioContext.createAnalyser();
-        this.remoteAnalyser.fftSize = 32;
-        this.remoteAnalyserData = new Uint8Array(this.remoteAnalyser.frequencyBinCount);
-        console.log('Remote analyzer created with frequency bins:', this.remoteAnalyser.frequencyBinCount);
-        
-        // Create an audio destination node (needed for some browsers)
-        const destination = this.audioContext.createMediaStreamDestination();
-        console.log('Audio destination: maxChannelCount:', destination.maxChannelCount, 
-            'numberOfInputs:', destination.numberOfInputs, 
-            'numberOfOutputs:', destination.numberOfOutputs);
-        
-        // Create voice indicators
-        this.createVoiceIndicators();
-        
-        // Create the microphone test button for debugging
-        this.createMicTestButton();
-        
         // Ensure audio context is running
         this.ensureAudioContextRunning();
-    }
-    
-    // Create voice visualization indicators in the UI
-    createVoiceIndicators() {
-        // Size and position of the indicators
-        const indicatorWidth = 0.05;
-        const indicatorHeight = 0.3;
-        const indicatorDepth = 0.01;
-        const indicatorColor = 0x00ff00;
-        
-        // Local voice indicator (your microphone)
-        const localGeometry = new THREE.BoxGeometry(indicatorWidth, indicatorHeight, indicatorDepth);
-        const localMaterial = new THREE.MeshBasicMaterial({ color: indicatorColor });
-        this.localVoiceIndicator = new THREE.Mesh(localGeometry, localMaterial);
-        this.localVoiceIndicator.position.set(-0.15, 1.6, -1.0); // Position near your paddle
-        this.localVoiceIndicator.scale.y = 0.1; // Start with minimal height
-        this.game.scene.add(this.localVoiceIndicator);
-        
-        // Remote voice indicator (opponent's microphone)
-        const remoteGeometry = new THREE.BoxGeometry(indicatorWidth, indicatorHeight, indicatorDepth);
-        const remoteMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-        this.remoteVoiceIndicator = new THREE.Mesh(remoteGeometry, remoteMaterial);
-        this.remoteVoiceIndicator.position.set(0.15, 1.6, -1.0); // Position near opponent's paddle
-        this.remoteVoiceIndicator.scale.y = 0.1; // Start with minimal height
-        this.game.scene.add(this.remoteVoiceIndicator);
-    }
-    
-    // Update voice indicators based on audio levels
-    updateVoiceIndicators() {
-        if (!this.localAnalyser || !this.remoteAnalyser) return;
-        
-        // Update local voice indicator
-        this.localAnalyser.getByteFrequencyData(this.localAnalyserData);
-        let localSum = 0;
-        for (let i = 0; i < this.localAnalyserData.length; i++) {
-            localSum += this.localAnalyserData[i];
-        }
-        const localAvg = localSum / this.localAnalyserData.length;
-        const localScale = Math.max(0.1, Math.min(1.0, localAvg / 128));
-        if (this.localVoiceIndicator) {
-            this.localVoiceIndicator.scale.y = localScale;
-        }
-        
-        // Update remote voice indicator
-        this.remoteAnalyser.getByteFrequencyData(this.remoteAnalyserData);
-        let remoteSum = 0;
-        for (let i = 0; i < this.remoteAnalyserData.length; i++) {
-            remoteSum += this.remoteAnalyserData[i];
-        }
-        const remoteAvg = remoteSum / this.remoteAnalyserData.length;
-        const remoteScale = Math.max(0.1, Math.min(1.0, remoteAvg / 128));
-        if (this.remoteVoiceIndicator) {
-            this.remoteVoiceIndicator.scale.y = remoteScale;
-        }
     }
     
     // Initiate a WebRTC peer connection
@@ -421,12 +411,6 @@ export class VoiceChat {
                         // Show a message to the user
                         this.game.showMessage('Click or tap screen to enable voice chat');
                     });
-                    
-                    // Connect remote stream to analyzer for visualization
-                    if (this.audioContext && this.remoteAnalyser) {
-                        const remoteSource = this.audioContext.createMediaStreamSource(remoteStream);
-                        remoteSource.connect(this.remoteAnalyser);
-                    }
                 } catch (err) {
                     console.error('Error setting up remote audio stream:', err);
                 }
@@ -540,7 +524,7 @@ export class VoiceChat {
         }
     }
     
-    // Play a test tone to ensure audio system is initialized
+    // Play a test tone to ensure audio is working properly
     playTestTone() {
         try {
             console.log('Testing audio output...');
@@ -584,6 +568,13 @@ export class VoiceChat {
         this.stream.getAudioTracks().forEach(track => {
             track.enabled = !this.isMuted;
         });
+        
+        // Show appropriate message
+        if (this.isMuted) {
+            this.game.showMessage('Voice chat muted');
+        } else {
+            this.game.showMessage('Voice chat unmuted');
+        }
         
         return this.isMuted;
     }
@@ -642,50 +633,28 @@ export class VoiceChat {
     
     // Clean up resources when voice chat is no longer needed
     cleanup() {
+        console.log('Cleaning up voice chat resources');
+        
+        // Reset any active connection
         this.resetConnection();
         
+        // Stop all audio tracks
         if (this.stream) {
             this.stream.getTracks().forEach(track => track.stop());
             this.stream = null;
         }
         
-        if (this.localVoiceIndicator) {
-            this.game.scene.remove(this.localVoiceIndicator);
-            this.localVoiceIndicator = null;
+        // Close audio context
+        if (this.audioContext) {
+            this.audioContext.close().catch(err => {
+                console.warn('Error closing audio context:', err);
+            });
         }
         
-        if (this.remoteVoiceIndicator) {
-            this.game.scene.remove(this.remoteVoiceIndicator);
-            this.remoteVoiceIndicator = null;
+        // Remove the mute button from the UI
+        if (this.muteButton && this.muteButton.parentNode) {
+            this.muteButton.parentNode.removeChild(this.muteButton);
         }
-    }
-    
-    // Update method called every frame
-    update() {
-        this.updateVoiceIndicators();
-    }
-    
-    // Create a microphone test button for debugging
-    createMicTestButton() {
-        // Create a simple button to test the microphone
-        const buttonSize = 0.1;
-        const buttonGeometry = new THREE.BoxGeometry(buttonSize, buttonSize, buttonSize);
-        const buttonMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
-        const button = new THREE.Mesh(buttonGeometry, buttonMaterial);
-        
-        // Position the button in a visible location
-        button.position.set(0, 1.3, -0.7);
-        
-        // Add click handler
-        button.userData = {
-            type: 'micTestButton',
-            onClick: () => {
-                this.playTestTone();
-            }
-        };
-        
-        this.game.scene.add(button);
-        console.log('Microphone test button created');
     }
     
     // Ensure audio context is running and set up handlers for user interaction

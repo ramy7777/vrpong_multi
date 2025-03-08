@@ -569,12 +569,33 @@ export class MultiplayerManager {
         }, 500);
     }
 
-    // Update method
+    // Update multiplayer state (called every frame)
     update() {
-        // Update voice chat if active
-        if (this.voiceChat) {
-            this.voiceChat.update();
+        if (!this.socket || !this.game) return;
+        
+        // Send player position if we're the host/client
+        if (this.isHost || this.isClient) {
+            this.sendPlayerPosition();
         }
+        
+        // Send ball position if we're the host
+        if (this.isHost) {
+            this.sendBallState();
+        }
+        
+        // Send controller states if in VR mode
+        if (this.game.vrMode && this.game.controllers && this.game.controllers.length > 0) {
+            this.sendControllerState();
+        }
+        
+        // Check connection state periodically
+        if (Date.now() - this.lastPingTime > this.pingInterval) {
+            this.checkConnection();
+            this.lastPingTime = Date.now();
+        }
+        
+        // Process any pending events
+        this.processEvents();
     }
     
     // Toggle mute status
@@ -593,5 +614,41 @@ export class MultiplayerManager {
     // Check if microphone is muted
     isMicrophoneMuted() {
         return this.voiceChat ? this.voiceChat.isMuted : false;
+    }
+
+    // Start voice chat
+    startVoiceChat() {
+        if (this.voiceChat) {
+            // Clean up any existing voice chat
+            this.voiceChat.cleanup();
+            this.voiceChat = null;
+        }
+        
+        if (!this.opponentId) {
+            console.error('Cannot start voice chat without opponent');
+            return;
+        }
+        
+        try {
+            // Import VoiceChat class
+            import('../audio/VoiceChat.js').then(module => {
+                console.log('Creating new voice chat instance');
+                this.voiceChat = new module.VoiceChat(this);
+                this.voiceChat.requestVoiceChat();
+            }).catch(err => {
+                console.error('Error importing VoiceChat module:', err);
+            });
+        } catch (err) {
+            console.error('Error starting voice chat:', err);
+        }
+    }
+    
+    // Stop voice chat
+    stopVoiceChat() {
+        if (this.voiceChat) {
+            console.log('Stopping voice chat');
+            this.voiceChat.cleanup();
+            this.voiceChat = null;
+        }
     }
 }

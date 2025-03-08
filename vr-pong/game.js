@@ -1,485 +1,320 @@
 import * as THREE from 'three';
-import { VRButton } from 'webxr';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { VoiceChatControls } from './js/ui/VoiceChatControls.js';
+import { Stats } from 'three/addons/libs/stats.module.js';
+import { Ball } from './js/entities/Ball.js';
+import { Paddle } from './js/entities/Paddle.js';
+import { MultiplayerManager } from './js/network/MultiplayerManager.js';
+import { VoiceChat } from './js/audio/VoiceChat.js';
 
-class VRPongGame {
-    constructor() {
-        this.scene = new THREE.Scene();
-        this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        this.renderer = new THREE.WebGLRenderer({ antialias: true });
-        this.clock = new THREE.Clock();
+export class Game {
+    constructor(container) {
+        // Reference to the container element
+        this.container = container;
         
-        // Player movement and rotation settings
-        this.moveSpeed = 0.05;
-        this.rotateSpeed = 0.05;
-        this.snapAngle = 25 * (Math.PI / 180); // 25 degrees in radians
-        this.rotationCooldown = 0;
-        this.rotationCooldownTime = 250; // milliseconds
-        this.lastRotationTime = 0;
+        // Scene setup
+        this.scene = null;
+        this.camera = null;
+        this.renderer = null;
+        this.controls = null;
         
-        this.playerGroup = new THREE.Group(); // Group to hold camera and controllers
-        this.scene.add(this.playerGroup);
-        this.playerGroup.add(this.camera);
-
-        // Controller states
-        this.controllerStates = {
-            left: { touching: false, gripping: false, lastPosition: new THREE.Vector3() },
-            right: { touching: false, gripping: false, lastPosition: new THREE.Vector3(), thumbstickPressed: false }
-        };
-
-        // Voice chat UI
-        this.voiceChatControls = null;
+        // Game objects
+        this.paddle1 = null;
+        this.paddle2 = null;
+        this.ball = null;
         
+        // UI elements
+        this.scoreElement = null;
+        this.messageElement = null;
+        
+        // VR controllers
+        this.controller1 = null;
+        this.controller2 = null;
+        this.controllerGrip1 = null;
+        this.controllerGrip2 = null;
+        this.controllers = [];
+        
+        // Voice chat
+        this.voiceChat = null;
+        
+        // Multiplayer
+        this.multiplayerManager = null;
+        
+        // Game state
+        this.vrMode = false;
+        this.multiplayer = false;
+        this.gameOver = false;
+        this.paused = false;
+        this.maxScore = 10;
+        
+        // Performance stats
+        this.stats = null;
+        
+        // Animation frame ID for cancellation
+        this.animationFrameId = null;
+        
+        // Delta time tracking
+        this.lastUpdateTime = Date.now();
+        this.deltaTime = 0;
+        
+        // Initialize the game
         this.init();
-        this.setupVR();
-        this.createEnvironment();
-        this.createTable();
-        this.createPaddle();
-        this.createBall();
-        this.animate();
     }
-
+    
+    // Initialize the game
     init() {
-        // Setup renderer
+        // Create scene
+        this.scene = new THREE.Scene();
+        this.scene.background = new THREE.Color(0x000000);
+        
+        // Create camera
+        this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        this.camera.position.z = 3;
+        
+        // Create renderer
+        this.renderer = new THREE.WebGLRenderer({ antialias: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setPixelRatio(window.devicePixelRatio);
         this.renderer.xr.enabled = true;
-        document.body.appendChild(this.renderer.domElement);
-
-        // Create VR button with proper session configuration
-        const button = VRButton.createButton(this.renderer);
-        document.body.appendChild(button);
-
-        // Setup scene
-        this.scene.background = new THREE.Color(0x000033);
-        this.camera.position.set(0, 1.6, -1.5);
-        this.camera.lookAt(0, 0.8, 0);
-
-        // Add lights
-        const ambientLight = new THREE.AmbientLight(0x404040);
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-        directionalLight.position.set(10, 10, 10);
-        this.scene.add(ambientLight, directionalLight);
-
-        // Handle window resize
-        window.addEventListener('resize', () => {
-            this.camera.aspect = window.innerWidth / window.innerHeight;
-            this.camera.updateProjectionMatrix();
-            this.renderer.setSize(window.innerWidth, window.innerHeight);
-        });
-
-        // Add session event listeners
+        this.container.appendChild(this.renderer.domElement);
+        
+        // Add VR button
+        const vrButton = VRButton.createButton(this.renderer);
+        this.container.appendChild(vrButton);
+        
+        // Track VR session
         this.renderer.xr.addEventListener('sessionstart', () => {
-            console.log('VR Session started');
+            console.log('VR session started');
+            this.vrMode = true;
         });
-
+        
         this.renderer.xr.addEventListener('sessionend', () => {
-            console.log('VR Session ended');
-            // Reset controller states
-            this.controllerStates = {
-                left: { touching: false, gripping: false },
-                right: { touching: false, gripping: false }
-            };
+            console.log('VR session ended');
+            this.vrMode = false;
         });
+        
+        // Create objects
+        this.createObjects();
+        
+        // Create VR controllers
+        this.createControllers();
+        
+        // Set up UI
+        this.createUI();
+        
+        // Set up lighting
+        this.createLighting();
+        
+        // Set up stats
+        this.stats = new Stats();
+        this.container.appendChild(this.stats.dom);
+        
+        // Set up event listeners
+        this.setupEventListeners();
+        
+        // Start animation loop
+        this.lastUpdateTime = Date.now();
+        this.animate();
     }
-
-    setupVR() {
-        // Set up VR button and default reference space
-        this.renderer.xr.addEventListener('sessionstart', () => {
-            console.log('Setting up VR session');
-            
-            // Set the initial reference space offset to be behind the paddle end
-            const referenceSpace = this.renderer.xr.getReferenceSpace();
-            const transform = new XRRigidTransform(
-                { x: 0, y: 0, z: -0.4 }, // Spawn point 0.4m behind paddle end
-                { x: 0, y: 0, z: 0, w: 1 }
-            );
-            this.renderer.xr.setReferenceSpace(
-                referenceSpace.getOffsetReferenceSpace(transform)
-            );
-
-            // Set up input sources
-            const session = this.renderer.xr.getSession();
-            session.addEventListener('inputsourceschange', (event) => {
-                console.log('Input sources changed:', event.added, event.removed);
-            });
-        });
-
-        // Setup both controllers
-        this.controllers = [];
-        this.controllerGrips = [];
-
-        // Left Controller (0)
-        this.controllers[0] = this.renderer.xr.getController(0);
-        this.playerGroup.add(this.controllers[0]);
-
-        // Right Controller (1)
-        this.controllers[1] = this.renderer.xr.getController(1);
-        this.playerGroup.add(this.controllers[1]);
-
-        // Add controller models
+    
+    // Create game objects
+    createObjects() {
+        // Create ball
+        this.ball = new Ball(this.scene);
+        
+        // Create paddles
+        this.paddle1 = new Paddle(this.scene, 1, this.camera); // Player paddle
+        this.paddle1.position.x = -2.5;
+        
+        this.paddle2 = new Paddle(this.scene, 2); // AI or opponent paddle
+        this.paddle2.position.x = 2.5;
+    }
+    
+    // Create VR controllers
+    createControllers() {
+        // Controller model factory
         const controllerModelFactory = new XRControllerModelFactory();
-
-        // Left Controller Grip
-        this.controllerGrips[0] = this.renderer.xr.getControllerGrip(0);
-        this.controllerGrips[0].add(controllerModelFactory.createControllerModel(this.controllerGrips[0]));
-        this.playerGroup.add(this.controllerGrips[0]);
-
-        // Right Controller Grip
-        this.controllerGrips[1] = this.renderer.xr.getControllerGrip(1);
-        this.controllerGrips[1].add(controllerModelFactory.createControllerModel(this.controllerGrips[1]));
-        this.playerGroup.add(this.controllerGrips[1]);
-
-        // Initialize controller states
-        this.controllerStates = {
-            left: { touching: false, gripping: false, lastPosition: new THREE.Vector3() },
-            right: { touching: false, gripping: false, lastPosition: new THREE.Vector3(), thumbstickPressed: false }
-        };
-
-        // Store the active controller for paddle control
-        this.activeController = this.controllers[1]; // Right controller by default
-        this.activeSide = 'right';
-
-        // Debug controller setup
-        this.renderer.xr.addEventListener('sessionstart', () => {
-            const session = this.renderer.xr.getSession();
-            if (session) {
-                console.log('Active XR Session:', session);
-                console.log('Input Sources:', session.inputSources);
-            }
-        });
-    }
-
-    checkControllerState(controller, side) {
-        const session = this.renderer.xr.getSession();
-        if (!session) return;
-
-        // Get input source from XRInputSourceArray
-        let inputSource = null;
-        for (let i = 0; i < session.inputSources.length; i++) {
-            if (session.inputSources[i].handedness === (side === 'left' ? 'left' : 'right')) {
-                inputSource = session.inputSources[i];
-                break;
-            }
-        }
         
-        if (!inputSource || !inputSource.gamepad) return;
-
-        const gamepad = inputSource.gamepad;
-        const currentTime = Date.now();
+        // Controller 1
+        this.controller1 = this.renderer.xr.getController(0);
+        this.controller1.name = 'controller-right';
+        this.scene.add(this.controller1);
         
-        // Handle thumbstick input
-        if (gamepad.axes.length >= 4) {
-            // Get thumbstick values
-            const thumbstickX = gamepad.axes[2]; // X-axis of the thumbstick
-            const thumbstickY = gamepad.axes[3]; // Y-axis of the thumbstick
-
-            // Apply movement or rotation based on controller side
-            if (side === 'left') {
-                // Left thumbstick controls movement
-                if (Math.abs(thumbstickX) > 0.1 || Math.abs(thumbstickY) > 0.1) {
-                    // Calculate movement direction relative to player's facing direction
-                    const moveX = thumbstickX * this.moveSpeed;
-                    const moveZ = -thumbstickY * this.moveSpeed;
-
-                    // Get the player's forward direction
-                    const forward = new THREE.Vector3(0, 0, -1);
-                    forward.applyQuaternion(this.playerGroup.quaternion);
-
-                    // Calculate right vector
-                    const right = new THREE.Vector3(1, 0, 0);
-                    right.applyQuaternion(this.playerGroup.quaternion);
-
-                    // Move the player group
-                    this.playerGroup.position.add(right.multiplyScalar(moveX));
-                    this.playerGroup.position.add(forward.multiplyScalar(moveZ));
-
-                    // Provide haptic feedback for movement
-                    if (gamepad.hapticActuators && gamepad.hapticActuators.length > 0) {
-                        const intensity = Math.min(Math.sqrt(moveX * moveX + moveZ * moveZ), 0.5);
-                        gamepad.hapticActuators[0].pulse(intensity, 16);
-                    }
-                }
-            } else if (side === 'right') {
-                // Right thumbstick controls snap rotation
-                const wasPressed = this.controllerStates[side].thumbstickPressed;
-                const isPressed = Math.abs(thumbstickX) > 0.7; // Higher threshold for snap rotation
-
-                // Check if thumbstick just crossed the threshold
-                if (isPressed && !wasPressed && currentTime - this.lastRotationTime > this.rotationCooldownTime) {
-                    // Determine rotation direction
-                    const rotationDirection = Math.sign(thumbstickX);
-                    
-                    // Apply snap rotation
-                    this.playerGroup.rotateY(-this.snapAngle * rotationDirection);
-                    
-                    // Provide haptic feedback for rotation
-                    if (gamepad.hapticActuators && gamepad.hapticActuators.length > 0) {
-                        gamepad.hapticActuators[0].pulse(0.5, 50); // Stronger, longer pulse for snap rotation
-                    }
-
-                    // Update last rotation time
-                    this.lastRotationTime = currentTime;
-                }
-
-                // Update thumbstick state
-                this.controllerStates[side].thumbstickPressed = isPressed;
-            }
-        }
-
-        // Check if controller is touching paddle
-        const controllerPosition = new THREE.Vector3();
-        controller.getWorldPosition(controllerPosition);
+        this.controllerGrip1 = this.renderer.xr.getControllerGrip(0);
+        this.controllerGrip1.add(controllerModelFactory.createControllerModel(this.controllerGrip1));
+        this.scene.add(this.controllerGrip1);
         
-        // Calculate distance to paddle
-        const paddlePosition = new THREE.Vector3();
-        this.paddle.getWorldPosition(paddlePosition);
-        const distance = controllerPosition.distanceTo(paddlePosition);
-
-        // Update touching state
-        const wasTouching = this.controllerStates[side].touching;
-        this.controllerStates[side].touching = distance < 0.1; // 10cm threshold
-
-        // Check grip button (Button 1 in mapping)
-        const isGripping = gamepad.buttons[1] && gamepad.buttons[1].pressed;
+        // Controller 2
+        this.controller2 = this.renderer.xr.getController(1);
+        this.controller2.name = 'controller-left';
+        this.scene.add(this.controller2);
         
-        // Debug output for button states
-        if (this.controllerStates[side].touching) {
-            console.log(`${side} controller:`, {
-                touching: this.controllerStates[side].touching,
-                gripping: isGripping,
-                distance: distance,
-                thumbstick: side === 'left' ? 
-                    { x: gamepad.axes[2], y: gamepad.axes[3] } : 
-                    { x: gamepad.axes[2], y: gamepad.axes[3] }
-            });
-        }
-
-        const wasGripping = this.controllerStates[side].gripping;
-        this.controllerStates[side].gripping = isGripping;
-
-        // Handle paddle control
-        if (this.controllerStates[side].touching) {
-            if (isGripping && !wasGripping) {
-                // Just started gripping while touching
-                this.activeSide = side;
-                this.activeController = controller;
-                
-                // Strong haptic feedback for initial grab
-                if (gamepad.hapticActuators && gamepad.hapticActuators.length > 0) {
-                    gamepad.hapticActuators[0].pulse(1.0, 100);
-                }
-            }
-        }
-
-        // Update paddle control and provide continuous haptic feedback
-        if (side === this.activeSide && this.controllerStates[side].gripping && this.controllerStates[side].touching) {
-            // Calculate movement since last frame
-            const movement = controllerPosition.distanceTo(this.controllerStates[side].lastPosition);
-            
-            // Update paddle position
-            this.updatePaddlePosition(controllerPosition);
-
-            // Provide haptic feedback based on movement
-            if (movement > 0.001 && gamepad.hapticActuators && gamepad.hapticActuators.length > 0) {
-                const intensity = THREE.MathUtils.clamp(movement * 10, 0.1, 0.5);
-                gamepad.hapticActuators[0].pulse(intensity, 16);
-            }
-        }
-
-        // Store current position for next frame
-        this.controllerStates[side].lastPosition.copy(controllerPosition);
+        this.controllerGrip2 = this.renderer.xr.getControllerGrip(1);
+        this.controllerGrip2.add(controllerModelFactory.createControllerModel(this.controllerGrip2));
+        this.scene.add(this.controllerGrip2);
+        
+        // Store references for easier access
+        this.controllers = [this.controller1, this.controller2];
+        
+        // Controller event listeners
+        this.controller1.addEventListener('selectstart', () => this.onControllerSelectStart(this.controller1));
+        this.controller1.addEventListener('selectend', () => this.onControllerSelectEnd(this.controller1));
+        this.controller2.addEventListener('selectstart', () => this.onControllerSelectStart(this.controller2));
+        this.controller2.addEventListener('selectend', () => this.onControllerSelectEnd(this.controller2));
     }
-
-    updatePaddlePosition(controllerPosition) {
-        // Constrain paddle movement to table bounds
-        const tableHalfWidth = 0.75;
-        const clampedX = THREE.MathUtils.clamp(
-            controllerPosition.x,
-            -tableHalfWidth + 0.15,
-            tableHalfWidth - 0.15
-        );
-
-        // Update paddle position
-        this.paddle.position.x = clampedX;
+    
+    // Create UI elements
+    createUI() {
+        // Score display
+        this.scoreElement = document.createElement('div');
+        this.scoreElement.id = 'score';
+        this.scoreElement.style.position = 'absolute';
+        this.scoreElement.style.top = '10px';
+        this.scoreElement.style.width = '100%';
+        this.scoreElement.style.textAlign = 'center';
+        this.scoreElement.style.fontSize = '24px';
+        this.scoreElement.style.fontFamily = 'Arial, sans-serif';
+        this.scoreElement.style.color = 'white';
+        this.scoreElement.style.textShadow = '2px 2px 4px #000000';
+        this.container.appendChild(this.scoreElement);
+        
+        // Message display
+        this.messageElement = document.createElement('div');
+        this.messageElement.id = 'message';
+        this.messageElement.style.position = 'absolute';
+        this.messageElement.style.top = '50%';
+        this.messageElement.style.left = '50%';
+        this.messageElement.style.transform = 'translate(-50%, -50%)';
+        this.messageElement.style.fontSize = '32px';
+        this.messageElement.style.fontFamily = 'Arial, sans-serif';
+        this.messageElement.style.color = 'white';
+        this.messageElement.style.textShadow = '2px 2px 4px #000000';
+        this.messageElement.style.textAlign = 'center';
+        this.messageElement.style.display = 'none';
+        this.container.appendChild(this.messageElement);
+        
+        // Update score display
+        this.updateScoreDisplay();
     }
-
-    createEnvironment() {
-        // Create futuristic environment
-        const gridHelper = new THREE.GridHelper(20, 20, 0x00ff00, 0x003300);
-        this.scene.add(gridHelper);
-
-        // Create walls with glowing effect
-        const wallGeometry = new THREE.BoxGeometry(20, 10, 0.1);
-        const wallMaterial = new THREE.MeshStandardMaterial({
-            color: 0x001133,
-            emissive: 0x001133,
-            metalness: 0.8,
-            roughness: 0.2
-        });
-
-        // Back wall
-        const backWall = new THREE.Mesh(wallGeometry, wallMaterial);
-        backWall.position.z = -10;
-        this.scene.add(backWall);
-
-        // Side walls
-        const leftWall = new THREE.Mesh(wallGeometry, wallMaterial);
-        leftWall.rotation.y = Math.PI / 2;
-        leftWall.position.x = -10;
-        this.scene.add(leftWall);
-
-        const rightWall = new THREE.Mesh(wallGeometry, wallMaterial);
-        rightWall.rotation.y = Math.PI / 2;
-        rightWall.position.x = 10;
-        this.scene.add(rightWall);
+    
+    // Create lighting
+    createLighting() {
+        // Ambient light
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        this.scene.add(ambientLight);
+        
+        // Directional light
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+        directionalLight.position.set(0, 1, 1);
+        this.scene.add(directionalLight);
     }
-
-    createTable() {
-        // Create table (standard dining table is about 1.5m x 0.9m)
-        const tableGeometry = new THREE.BoxGeometry(1.5, 0.1, 2);
-        const tableMaterial = new THREE.MeshStandardMaterial({
-            color: 0x0044ff,
-            metalness: 0.7,
-            roughness: 0.2,
-            emissive: 0x001133
-        });
-        this.table = new THREE.Mesh(tableGeometry, tableMaterial);
-        this.table.position.y = 0.8; // Standard table height
-        this.table.position.z = -1.0; // Table 1m in front of spawn point
-        this.scene.add(this.table);
+    
+    // Set up event listeners
+    setupEventListeners() {
+        // Window resize
+        window.addEventListener('resize', this.onWindowResize.bind(this));
+        
+        // Keyboard controls
+        window.addEventListener('keydown', this.onKeyDown.bind(this));
+        window.addEventListener('keyup', this.onKeyUp.bind(this));
+        
+        // Mouse controls
+        window.addEventListener('mousemove', this.onMouseMove.bind(this));
+        
+        // Touch controls
+        this.container.addEventListener('touchmove', this.onTouchMove.bind(this));
     }
-
-    createPaddle() {
-        // Create paddle (scaled down to match table size)
-        const paddleGeometry = new THREE.BoxGeometry(0.3, 0.1, 0.1);
-        const paddleMaterial = new THREE.MeshStandardMaterial({
-            color: 0x00ff00,
-            emissive: 0x00ff00,
-            emissiveIntensity: 0.5
-        });
-        this.paddle = new THREE.Mesh(paddleGeometry, paddleMaterial);
-        this.paddle.position.set(0, 0.9, -0.1); // Position paddle at near end of table
-        this.scene.add(this.paddle);
-    }
-
-    createBall() {
-        // Create ball (scaled down to match table size)
-        const ballGeometry = new THREE.SphereGeometry(0.02);
-        const ballMaterial = new THREE.MeshStandardMaterial({
-            color: 0xffff00,
-            emissive: 0xffff00,
-            emissiveIntensity: 0.5
-        });
-        this.ball = new THREE.Mesh(ballGeometry, ballMaterial);
-        this.ball.position.set(0, 0.9, -1.0); // Start ball at center of table
-        this.scene.add(this.ball);
-
-        // Ball physics - reduced speed by half
-        this.ballVelocity = new THREE.Vector3(0.01, 0, 0.01);
-    }
-
-    updateBall() {
-        // Update ball position
-        this.ball.position.add(this.ballVelocity);
-
-        // Ball-table collision (adjusted for new table size)
-        if (this.ball.position.x > 0.7 || this.ball.position.x < -0.7) {
-            this.ballVelocity.x *= -1;
-        }
-
-        // Ball-paddle collision (adjusted for new table size)
-        if (this.ball.position.z > -0.2 && this.ball.position.z < 0) {
-            if (Math.abs(this.ball.position.x - this.paddle.position.x) < 0.2) {
-                this.ballVelocity.z *= -1;
-                // Add some random x velocity for variety (reduced by half)
-                this.ballVelocity.x += (Math.random() - 0.5) * 0.005;
-            }
-        }
-
-        // Reset ball if it goes past paddle
-        if (this.ball.position.z > 0) {
-            this.ball.position.set(0, 0.9, -1.0);
-            this.ballVelocity.set(0.01, 0, 0.01); // Reset with slower speed
-        }
-
-        // Ball-back wall collision
-        if (this.ball.position.z < -2.0) {
-            this.ballVelocity.z *= -1;
-        }
-    }
-
+    
     // Initialize multiplayer
     initMultiplayer() {
-        import('./js/network/MultiplayerManager.js').then(module => {
-            const MultiplayerManager = module.MultiplayerManager;
-            this.multiplayerManager = new MultiplayerManager(this);
-            
-            // Initialize voice chat controls when multiplayer is active
-            this.voiceChatControls = new VoiceChatControls(this.scene, this.multiplayerManager);
-        });
-    }
-
-    // Show voice chat controls when in multiplayer game
-    showVoiceChatControls() {
-        if (this.voiceChatControls && this.multiplayerManager) {
-            const isInMultiplayerGame = this.multiplayerManager.isMultiplayerActive;
-            const hasOpponent = this.multiplayerManager.opponentId !== null;
-            
-            if (isInMultiplayerGame && hasOpponent) {
-                console.log('Showing voice chat controls');
-                this.voiceChatControls.show();
+        this.multiplayer = true;
+        
+        // Create multiplayer manager
+        this.multiplayerManager = new MultiplayerManager(this);
+        
+        // Initialize voice chat if multiplayer
+        if (this.multiplayer && this.multiplayerManager) {
+            if (this.voiceChat) {
+                this.voiceChat.cleanup();
             }
+            this.voiceChat = new VoiceChat(this.multiplayerManager);
+            this.voiceChat.requestVoiceChat();
+        }
+        
+        // Setup resize handler
+        window.addEventListener('resize', this.onWindowResize.bind(this));
+    }
+    
+    // Start a match
+    startMatch() {
+        console.log('Starting match...');
+        this.resetGame();
+        this.paused = false;
+        this.showMessage('Get Ready!', 2000);
+        
+        // Start multiplayer sync
+        if (this.multiplayer && this.multiplayerManager) {
+            this.multiplayerManager.startMatch();
         }
     }
-
-    // Hide voice chat controls
-    hideVoiceChatControls() {
-        if (this.voiceChatControls) {
-            this.voiceChatControls.hide();
-        }
+    
+    // End a match
+    endMatch() {
+        console.log('Ending match...');
+        this.paused = true;
     }
-
+    
+    // Main animation loop
     animate() {
-        this.renderer.setAnimationLoop(() => {
-            const session = this.renderer.xr.getSession();
-            
-            // Check both controllers if we have an active session
-            if (session) {
-                if (this.controllers[0]) this.checkControllerState(this.controllers[0], 'left');
-                if (this.controllers[1]) this.checkControllerState(this.controllers[1], 'right');
-            }
-
-            // Update multiplayer state if active
-            if (this.multiplayerManager) {
-                this.multiplayerManager.update();
-                
-                // Show voice chat controls if in a multiplayer game
-                if (this.multiplayerManager.isMultiplayerActive) {
-                    if (this.multiplayerManager.opponentId) {
-                        this.showVoiceChatControls();
-                    }
-                } else {
-                    this.hideVoiceChatControls();
-                }
-            }
-            
-            // Update voice chat controls
-            if (this.voiceChatControls) {
-                this.voiceChatControls.update(this.controllers);
-            }
-
-            this.updateBall();
-            this.renderer.render(this.scene, this.camera);
-        });
+        // Request next frame
+        this.animationFrameId = requestAnimationFrame(this.animate.bind(this));
+        
+        // Update controls
+        this.controls.update();
+        
+        // Update game state
+        this.update();
+        
+        // Render the scene
+        this.renderer.render(this.scene, this.camera);
+        
+        // Update stats
+        if (this.stats) {
+            this.stats.update();
+        }
     }
+    
+    // Update game state
+    update() {
+        // Update delta time
+        const now = Date.now();
+        this.deltaTime = (now - this.lastUpdateTime) / 1000;
+        this.lastUpdateTime = now;
+        
+        // Update paddle positions
+        this.paddle1.update(this.deltaTime);
+        this.paddle2.update(this.deltaTime);
+        
+        // Update ball position
+        this.ball.update(this.deltaTime, this.paddle1, this.paddle2);
+        
+        // Check game over
+        if (this.ball.score1 >= this.maxScore || this.ball.score2 >= this.maxScore) {
+            this.endGame();
+        }
+        
+        // Update multiplayer state
+        if (this.multiplayer && this.multiplayerManager) {
+            this.multiplayerManager.update();
+        }
+    }
+
+    // ... existing code ...
 }
 
 // Start the game
 document.addEventListener('DOMContentLoaded', () => {
-    const game = new VRPongGame();
+    const game = new Game();
     
     // Initialize multiplayer after a short delay to ensure the scene is ready
     setTimeout(() => {
