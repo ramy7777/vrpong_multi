@@ -28,7 +28,6 @@ export class Game {
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.xr.enabled = true;
         document.body.appendChild(this.renderer.domElement);
-        document.body.appendChild(VRButton.createButton(this.renderer));
         this.clock = new THREE.Clock();
         
         // Add event emitter functionality
@@ -108,7 +107,17 @@ export class Game {
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.xr.enabled = true;
         document.body.appendChild(this.renderer.domElement);
-        document.body.appendChild(VRButton.createButton(this.renderer));
+        
+        // Check if we're on a mobile device
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        
+        // Only add VR button if not on mobile
+        if (!isMobile) {
+            const vrButton = VRButton.createButton(this.renderer);
+            document.body.appendChild(vrButton);
+        } else {
+            console.log("Mobile device detected, VR button hidden");
+        }
 
         // Position camera for desktop view
         this.camera.position.set(0, 1.7, 0.8);
@@ -1259,6 +1268,9 @@ export class Game {
                                 this.soundManager.playScore();
                             }
                             
+                            // Emit score event for haptic feedback
+                            this.emit('score', { side: 'ai' });
+                            
                             // Sync scores in multiplayer mode
                             if (this.isMultiplayer && this.multiplayerManager && this.isLocalPlayer) {
                                 this.multiplayerManager.updateScore(this.playerScore, this.aiScore);
@@ -1278,6 +1290,9 @@ export class Game {
                                 this.soundManager.playScore();
                             }
                             
+                            // Emit score event for haptic feedback
+                            this.emit('score', { side: 'player' });
+                            
                             // Sync scores in multiplayer mode
                             if (this.isMultiplayer && this.multiplayerManager && this.isLocalPlayer) {
                                 this.multiplayerManager.updateScore(this.playerScore, this.aiScore);
@@ -1289,6 +1304,42 @@ export class Game {
                                     this.ball.start();
                                 }
                             }, 1000);
+                        }
+
+                        // Handle paddle collision
+                        if (collision === 'paddle') {
+                            // Play paddle hit sound
+                            if (this.soundManager) {
+                                this.soundManager.playPaddleHit();
+                            }
+                            
+                            // Emit paddle hit event for haptic feedback
+                            this.emit('paddleHit', { position: collision });
+                            
+                            // Trigger haptic feedback for the player's paddle
+                            if (this.isInVR && collision === this.paddles[0]) {
+                                this.triggerPaddleHaptics();
+                            }
+                            
+                            // Send collision event in multiplayer
+                            if (this.isMultiplayer && this.multiplayerManager) {
+                                this.multiplayerManager.sendCollisionEvent('paddle', collision);
+                            }
+                        }
+                        // Handle wall collision
+                        else if (collision === 'wall') {
+                            // Play wall bounce sound
+                            if (this.soundManager) {
+                                this.soundManager.playWallBounce();
+                            }
+                            
+                            // Emit wall hit event for haptic feedback
+                            this.emit('wallHit', { position: collision });
+                            
+                            // Send collision event in multiplayer
+                            if (this.isMultiplayer && this.multiplayerManager) {
+                                this.multiplayerManager.sendCollisionEvent('wall', collision);
+                            }
                         }
                     }
                     
