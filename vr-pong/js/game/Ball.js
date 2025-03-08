@@ -4,11 +4,13 @@ export class Ball {
     constructor(scene) {
         this.scene = scene;
         this.initialSpeed = 0.015;
-        this.speedIncrease = 1.1;
-        this.maxSpeed = 0.05;
+        this.speedIncrease = 1.05;
+        this.maxSpeed = 0.08;
         this.hits = 0;
         this.ballVelocity = new THREE.Vector3(0, 0, 0);
         this.speed = 1.5;
+        // Track the highest speed reached during gameplay
+        this.highestSpeedReached = this.initialSpeed;
         this.createBall();
         this.reset();
     }
@@ -39,6 +41,8 @@ export class Ball {
         this.ball.position.set(0, 0.9, -1.0);
         this.ballVelocity.set(0, 0, 0);
         this.hits = 0;
+        // Reset highest speed back to initial speed when game resets
+        this.highestSpeedReached = this.initialSpeed;
     }
 
     start() {
@@ -62,8 +66,18 @@ export class Ball {
         const currentSpeed = this.ballVelocity.length();
         if (currentSpeed < this.maxSpeed) {
             this.ballVelocity.multiplyScalar(this.speedIncrease);
+            
+            // Check if we've reached a new highest speed
+            const newSpeed = this.ballVelocity.length();
+            if (newSpeed > this.highestSpeedReached) {
+                console.log(`New highest speed reached: ${newSpeed.toFixed(5)} (previous: ${this.highestSpeedReached.toFixed(5)})`);
+                this.highestSpeedReached = newSpeed;
+            }
+            
+            // Cap at max speed if needed
             if (this.ballVelocity.length() > this.maxSpeed) {
                 this.ballVelocity.normalize().multiplyScalar(this.maxSpeed);
+                this.highestSpeedReached = this.maxSpeed;
             }
         }
     }
@@ -78,50 +92,34 @@ export class Ball {
                 this.ballVelocity.x * -0.2, // Slightly reduce x component
                 0,
                 this.ballVelocity.z * -1 // Reverse z direction
-            ).normalize().multiplyScalar(defaultSpeed);
-            
-            // console.log(`Using default reflection vector: (${defaultVector.x.toFixed(5)}, ${defaultVector.y.toFixed(5)}, ${defaultVector.z.toFixed(5)})`);
-            return defaultVector;
+            );
+            // Normalize and apply the current speed (maintain speed)
+            return defaultVector.normalize().multiplyScalar(Math.max(defaultSpeed, this.highestSpeedReached));
         }
 
-        // console.log(`Calculating reflection angle - Hit position: (${hitPosition.x.toFixed(3)}, ${hitPosition.y.toFixed(3)}, ${hitPosition.z.toFixed(3)})`);
-        // console.log(`Paddle position: (${paddlePosition.x.toFixed(3)}, ${paddlePosition.y.toFixed(3)}, ${paddlePosition.z.toFixed(3)})`);
+        // Calculate horizontal offset from paddle center
+        const horizontalOffset = hitPosition.x - paddlePosition.x;
         
-        // Calculate hit offset (how far from paddle center)
-        const hitOffset = hitPosition.x - paddlePosition.x;
+        // Normalize the offset to range from -1 to 1
+        // Assuming paddle width is 0.3
+        const paddleHalfWidth = 0.15;
+        const normalizedOffset = THREE.MathUtils.clamp(horizontalOffset / paddleHalfWidth, -1, 1);
         
-        // Normalize offset to range -1 to 1 (assumes paddle width is 0.3)
-        const normalizedOffset = Math.max(Math.min(hitOffset / 0.15, 1), -1);
+        // Calculate reflection angle based on hit position
+        // Center hits go straight, edge hits go at an angle
+        const maxAngle = Math.PI / 3; // 60 degrees for maximum angle
+        const reflectionAngle = normalizedOffset * maxAngle;
         
-        // console.log(`Hit offset: ${hitOffset.toFixed(3)}, Normalized offset: ${normalizedOffset.toFixed(3)})`);
-        
-        // Calculate reflection angle: up to 60 degrees (PI/3) from center
-        const angle = normalizedOffset * (Math.PI / 3);
-        
-        // Get current ball speed
-        const speed = this.ballVelocity.length();
-        
-        // Determine z direction based on which side of the table the paddle is on
-        // This ensures the ball always moves in the correct direction after a hit
-        const paddleZPos = paddlePosition.z;
-        const zDirection = paddleZPos > -1.0 ? -1 : 1;  // If paddle is on near side (-0.1), ball goes away (-1)
-        
-        // console.log(`Paddle Z position: ${paddleZPos.toFixed(3)}, Z direction: ${zDirection}`);
-        
-        // Create reflection vector
-        const reflectionVector = new THREE.Vector3(
-            Math.sin(angle) * speed,
-            0,
-            Math.cos(angle) * speed * zDirection
+        // Calculate the reflected direction
+        const speed = Math.max(this.ballVelocity.length(), this.highestSpeedReached); // Maintain at least current speed
+        const direction = new THREE.Vector3(
+            Math.sin(reflectionAngle), // X component based on angle
+            0, // No vertical movement
+            -Math.cos(reflectionAngle) * Math.sign(this.ballVelocity.z) // Z direction reversed
         );
         
-        // Apply a small random factor to avoid predictable patterns
-        reflectionVector.x += (Math.random() - 0.5) * 0.01;
-        
-        // console.log(`Reflection angle: ${(angle * 180 / Math.PI).toFixed(2)} degrees`);
-        // console.log(`Reflection vector: (${reflectionVector.x.toFixed(5)}, ${reflectionVector.y.toFixed(5)}, ${reflectionVector.z.toFixed(5)})`);
-        
-        return reflectionVector;
+        // Ensure the new vector has the same speed as before
+        return direction.normalize().multiplyScalar(speed);
     }
 
     checkPaddleCollision(paddle) {
@@ -213,19 +211,26 @@ export class Ball {
             // Additional check for edge overlap
             const edgeOverlap = Math.abs(relativeX) - edgeZone;
             if (isEdgeHit && edgeOverlap < 0.05) { // Only count edge hits within a reasonable range
-                // Edge hit - reflect with a steeper angle and slight speed reduction
+                // Edge hit - reflect with a steeper angle but maintain speed
                 const normalizedHitPoint = (relativeX / (paddleWidth * 0.5));
                 const clampedHitPoint = Math.min(Math.max(normalizedHitPoint, -0.9), 0.9); // Prevent extreme angles
                 const deflectionAngle = clampedHitPoint * (Math.PI / 3); // Up to 60 degrees
                 
-                // Maintain some of the original velocity but add strong sideways component
-                const speed = this.ballVelocity.length() * 0.9; // Slight speed reduction
+                // Calculate current speed
+                const currentSpeed = this.ballVelocity.length();
+                // Use at least the highest speed reached to avoid slowdowns
+                const speed = Math.max(currentSpeed, this.highestSpeedReached);
                 const zDirection = this.ballVelocity.z > 0 ? -1 : 1;
                 
+                // Create new velocity vector with maintained/increased speed
                 this.ballVelocity.x = Math.sin(deflectionAngle) * speed;
                 this.ballVelocity.z = Math.cos(deflectionAngle) * speed * zDirection;
                 
-                // console.log(`Edge hit detected - Deflection angle: ${(deflectionAngle * 180 / Math.PI).toFixed(2)}°, New velocity: (${this.ballVelocity.x.toFixed(3)}, ${this.ballVelocity.y.toFixed(3)}, ${this.ballVelocity.z.toFixed(3)})`);
+                // Update highest speed if we've increased it
+                if (speed > this.highestSpeedReached) {
+                    console.log(`New highest speed reached during edge hit: ${speed.toFixed(5)}`);
+                    this.highestSpeedReached = speed;
+                }
                 
                 return 'edge';
             }
@@ -246,12 +251,27 @@ export class Ball {
         return false;
     }
 
+    // Update method to maintain current speed level
+    ensureMinimumSpeed() {
+        const currentSpeed = this.ballVelocity.length();
+        // Only check if ball is actually moving
+        if (currentSpeed > 0 && currentSpeed < this.highestSpeedReached) {
+            // Ball is moving but below its highest reached speed, so increase it
+            console.log(`Ball speed (${currentSpeed.toFixed(5)}) below highest speed (${this.highestSpeedReached.toFixed(5)}), restoring to highest speed`);
+            // Maintain direction but restore speed
+            this.ballVelocity.normalize().multiplyScalar(this.highestSpeedReached);
+        }
+    }
+
     update(delta, playerPaddle, aiPaddle) {
         const prevX = this.ball.position.x;
         const prevZ = this.ball.position.z;
         
         // Debug information about current ball state
         // console.log(`Ball update - Position before: (${this.ball.position.x.toFixed(3)}, ${this.ball.position.y.toFixed(3)}, ${this.ball.position.z.toFixed(3)}) | Velocity: (${this.ballVelocity.x.toFixed(5)}, ${this.ballVelocity.y.toFixed(5)}, ${this.ballVelocity.z.toFixed(5)})`);
+        
+        // Ensure minimum speed before updating position
+        this.ensureMinimumSpeed();
         
         this.ball.position.add(this.ballVelocity);
         
@@ -266,6 +286,8 @@ export class Ball {
         if (this.ball.position.x > 0.7 || this.ball.position.x < -0.7) {
             this.ball.position.x = Math.sign(this.ball.position.x) * 0.7;
             this.ballVelocity.x *= -1;
+            // Ensure minimum speed after wall collision
+            this.ensureMinimumSpeed();
         }
 
         // Check paddle collision flags
@@ -303,9 +325,10 @@ export class Ball {
                     // Edge hits are handled in checkPaddleCollision
                     
                     this.hits++;
-                    if (this.hits % 2 === 0) {
-                        this.increaseSpeed();
-                    }
+                    // Increase speed on every hit (changed from every 2 hits)
+                    this.increaseSpeed();
+                    // Always ensure minimum speed
+                    this.ensureMinimumSpeed();
                     
                     return 'player';
                 }
@@ -345,9 +368,10 @@ export class Ball {
                     // Edge hits are handled in checkPaddleCollision
                     
                     this.hits++;
-                    if (this.hits % 2 === 0) {
-                        this.increaseSpeed();
-                    }
+                    // Increase speed on every hit (changed from every 2 hits)
+                    this.increaseSpeed();
+                    // Always ensure minimum speed
+                    this.ensureMinimumSpeed();
                     
                     return 'ai';
                 }
@@ -372,6 +396,9 @@ export class Ball {
             this.reset();
             return outOfBounds;
         }
+
+        // Final check to ensure minimum speed is maintained
+        this.ensureMinimumSpeed();
 
         return false;
     }
