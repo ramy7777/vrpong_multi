@@ -1,6 +1,6 @@
 export class AIAssistant {
     constructor(game) {
-        console.log("AI Assistant: Constructor called");
+        console.log("AI Assistant: Initializing AI assistant");
         this.game = game;
         this.messages = [];
         this.isInitialized = false;
@@ -17,87 +17,133 @@ export class AIAssistant {
         this.lastSpeechTimestamp = null; // Add this to track when speech started
         this.micButtonPressed = false; // Add flag to track button state
         
-        console.log("AI Assistant: Basic properties initialized, isSpeaking =", this.isSpeaking);
-        
-        // Initialize audio context for browsers that need it
-        this.initAudioContext();
+        // New properties for realtime audio
+        this.isRealtimeMode = false; // Start with traditional mode for broader compatibility
+        this.audioContext = null;
+        this.mediaRecorder = null;
+        this.recordedChunks = [];
+        this.audioPlayer = new Audio();
         
         // Check if we have a socket connection from multiplayer manager
-        if (this.game.multiplayerManager && this.game.multiplayerManager.socket) {
+        if (game && game.multiplayerManager && game.multiplayerManager.socket) {
+            this.socket = game.multiplayerManager.socket;
             this.useServerSide = true;
-            this.socket = this.game.multiplayerManager.socket;
             this.isInitialized = true; // Mark as initialized when using server-side
             console.log("AI Assistant: Using server-side AI processing via socket.io, marked as initialized");
             
             this.setupSocketListeners();
+        } else {
+            console.warn("AI Assistant: No socket provided, AI assistant will be limited");
         }
         
-        // Always create the setup UI for API key entry first
-        console.log("AI Assistant: Creating setup UI for API key entry");
+        // Create setup UI for API key
         this.createSetupUI();
         
-        console.log("AI Assistant: Constructor completed successfully");
+        // Initialize audio context
+        this.initAudioContext();
+        
+        // Check browser compatibility for speech features
+        this.checkSpeechCompatibility();
+        
+        console.log("AI Assistant: Basic properties initialized, isSpeaking =", this.isSpeaking);
     }
     
     setupSocketListeners() {
-        if (!this.socket) return;
+        if (!this.socket) {
+            console.error("AI Assistant: No socket available for event listeners");
+            return;
+        }
         
         console.log("AI Assistant: Setting up socket listeners");
         
         this.socket.on('openai-response', (data) => {
-            console.log("Received OpenAI response from server:", data);
-            if (data.error) {
-                console.error("Error from server OpenAI processing:", data.error);
-                this.updateLastAssistantMessage("Sorry, there was an error processing your request. Please try again later.");
-                return;
+            const { response } = data;
+            console.log("AI Assistant: Received response from OpenAI:", response.substring(0, 50) + "...");
+            
+            // Update the conversation with the AI's response
+            this.updateLastAssistantMessage(response);
+            
+            // Speak the response if not in realtime mode
+            if (!this.isRealtimeMode) {
+                this.speakText(response);
+            }
+        });
+        
+        // New event for realtime audio response
+        this.socket.on('openai-realtime-response', (data) => {
+            const { text, audio, transcription } = data;
+            console.log("AI Assistant: Received realtime response from OpenAI:", text.substring(0, 50) + "...");
+            
+            // Update the conversation with the transcription if it's not already added
+            if (transcription && this.chatHistory.length > 0 && 
+                this.chatHistory[this.chatHistory.length - 1].content !== transcription) {
+                this.addMessageToConversation('user', transcription);
             }
             
-            if (data.response) {
-                this.updateLastAssistantMessage(data.response);
-                this.speakText(data.response);
+            // Update the conversation with the AI's response
+            this.updateLastAssistantMessage(text);
+            
+            // Play the audio response
+            if (audio) {
+                this.playOpenAIAudio(audio);
             }
         });
         
-        // Handle OpenAI errors
-        this.socket.on('openai-error', (data) => {
-            console.error("OpenAI error from server:", data.error);
-            this.updateLastAssistantMessage(`Sorry, there was an error: ${data.error}`);
-        });
-        
-        // Handle API key status updates
+        // Listen for OpenAI setup status
         this.socket.on('openai-key-status', (data) => {
             if (data.success) {
-                console.log("API key successfully set on server");
-                this.showMessage("API key successfully set! Voice chat is now active.");
-                this.apiKey = "server-managed"; // Mark that we're using a server-managed key
-                this.isInitialized = true;
+                console.log("AI Assistant: OpenAI API key set successfully");
                 
-                // Important: Remove the setup UI first
-                this.hideSetupUI();
-                
-                // Then create and show the chat UI
-                if (!this.chatContainer) {
+                // Hide the setup UI after a short delay
+                setTimeout(() => {
+                    this.hideSetupUI();
+                    
+                    // Set API key to a placeholder since the server is managing it
+                    this.apiKey = "server-managed";
+                    this.isInitialized = true;
+                    
+                    // Create and show the chat UI
                     this.createChatUI();
-                }
-                this.showChatUI();
-                
-                // Add a welcome message
-                this.addMessageToConversation('assistant', 'Hello! I\'m your AI assistant. I can help with your Pong game or we can chat about anything you\'d like to discuss.');
-                this.speakText('Hello! I\'m your AI assistant. I can help with your Pong game or we can chat about anything you\'d like to discuss.');
+                    this.showChatUI();
+                    
+                    // Add a welcome message
+                    this.addMessageToConversation('assistant', 'Hello! I\'m your AI assistant. I can help with your Pong game or we can chat about anything you\'d like to discuss.');
+                    
+                    // If in realtime mode, we don't speak the welcome message here
+                    // as we'll wait for the user to interact first
+                    if (!this.isRealtimeMode) {
+                        this.speakText('Hello! I\'m your AI assistant. I can help with your Pong game or we can chat about anything you\'d like to discuss.');
+                    }
+                }, 1000);
             } else {
                 console.error("API key error:", data.error);
-                this.showMessage(`Error setting API key: ${data.error}`);
                 
-                // Show error in the setup UI if it exists
+                // Update the setup UI with the error
                 if (this.setupContainer) {
-                    const statusElements = this.setupContainer.querySelectorAll('p');
-                    if (statusElements.length > 0) {
-                        const statusMsg = statusElements[statusElements.length - 1];
-                        statusMsg.textContent = data.error || 'Failed to connect. Please check your API key.';
-                        statusMsg.style.color = '#ff5555';
+                    const messageElement = this.setupContainer.querySelector('.message');
+                    if (messageElement) {
+                        messageElement.textContent = data.error || "Failed to set API key";
+                        messageElement.style.color = "#ff3333";
+                    }
+                    
+                    // Re-enable the form
+                    const form = this.setupContainer.querySelector('form');
+                    const input = this.setupContainer.querySelector('input');
+                    const button = this.setupContainer.querySelector('button');
+                    
+                    if (form && input && button) {
+                        form.style.pointerEvents = "auto";
+                        input.disabled = false;
+                        button.disabled = false;
                     }
                 }
             }
+        });
+        
+        // Listen for OpenAI errors
+        this.socket.on('openai-error', (data) => {
+            console.error("OpenAI error from server:", data.error);
+            this.showMessage(data.error || "Error communicating with OpenAI");
         });
     }
     
@@ -316,481 +362,500 @@ export class AIAssistant {
     createChatUI() {
         console.log("AI Assistant: Creating chat UI");
         
-        // Create chat container
-        this.chatContainer = document.createElement('div');
-        this.chatContainer.id = 'ai-chat-container';
-        this.chatContainer.style.position = 'absolute';
-        this.chatContainer.style.bottom = '20px';
-        this.chatContainer.style.right = '20px';
-        this.chatContainer.style.width = '300px';
-        this.chatContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-        this.chatContainer.style.borderRadius = '8px';
-        this.chatContainer.style.overflow = 'hidden';
-        this.chatContainer.style.display = 'flex';
-        this.chatContainer.style.flexDirection = 'column';
-        this.chatContainer.style.zIndex = '1000';
-        this.chatContainer.style.border = '2px solid #4d69ff';
-        document.body.appendChild(this.chatContainer);
+        // Create container if it doesn't exist
+        if (!this.chatContainer) {
+            this.chatContainer = document.createElement('div');
+            this.chatContainer.id = 'ai-chat-container';
+            this.chatContainer.style.position = 'fixed';
+            this.chatContainer.style.bottom = '20px';
+            this.chatContainer.style.right = '20px';
+            this.chatContainer.style.width = '350px';
+            this.chatContainer.style.maxHeight = '500px';
+            this.chatContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+            this.chatContainer.style.color = 'white';
+            this.chatContainer.style.padding = '15px';
+            this.chatContainer.style.borderRadius = '10px';
+            this.chatContainer.style.fontFamily = 'Arial, sans-serif';
+            this.chatContainer.style.zIndex = '1000';
+            this.chatContainer.style.display = 'flex';
+            this.chatContainer.style.flexDirection = 'column';
+            this.chatContainer.style.boxShadow = '0 4px 8px rgba(0, 0, 0, 0.3)';
+            this.chatContainer.style.border = '1px solid rgba(76, 175, 80, 0.5)';
+        }
         
-        // Add header with title
-        const header = document.createElement('div');
-        header.style.padding = '10px';
-        header.style.backgroundColor = '#4d69ff';
-        header.style.color = 'white';
-        header.style.fontWeight = 'bold';
-        header.style.display = 'flex';
-        header.style.justifyContent = 'space-between';
-        header.style.alignItems = 'center';
-        this.chatContainer.appendChild(header);
+        // Create header with title and buttons
+        const headerDiv = document.createElement('div');
+        headerDiv.style.display = 'flex';
+        headerDiv.style.justifyContent = 'space-between';
+        headerDiv.style.marginBottom = '10px';
+        headerDiv.style.paddingBottom = '10px';
+        headerDiv.style.borderBottom = '1px solid rgba(255, 255, 255, 0.2)';
         
+        // Title
         const title = document.createElement('div');
-        title.textContent = 'PongGPT Assistant';
-        header.appendChild(title);
+        title.textContent = 'AI Assistant';
+        title.style.fontWeight = 'bold';
+        title.style.fontSize = '16px';
         
-        // Add buttons container
-        const buttonsContainer = document.createElement('div');
-        buttonsContainer.style.display = 'flex';
-        header.appendChild(buttonsContainer);
+        // Buttons container
+        const buttonsDiv = document.createElement('div');
+        buttonsDiv.style.display = 'flex';
+        buttonsDiv.style.gap = '5px';
         
-        // Add a manual speak button
-        const speakButton = document.createElement('button');
-        speakButton.textContent = 'Speak';
-        speakButton.style.backgroundColor = '#2196F3'; // Blue
-        speakButton.style.color = 'white';
-        speakButton.style.border = 'none';
-        speakButton.style.borderRadius = '4px';
-        speakButton.style.padding = '4px 8px';
-        speakButton.style.fontSize = '12px';
-        speakButton.style.cursor = 'pointer';
-        speakButton.style.marginRight = '5px';
-        speakButton.title = 'Click to make the AI speak its last message';
-        speakButton.addEventListener('click', () => {
-            console.log("AI Assistant: Manual speak triggered");
-            
-            // Find the last assistant message
-            const lastMessage = this.findLastAssistantMessage();
-            
-            if (lastMessage) {
-                // Cancel any ongoing speech
-                window.speechSynthesis.cancel();
-                this.isSpeaking = false;
-                
-                // Start fresh speech
-                this.speakText(lastMessage);
-            } else {
-                this.showMessage("No AI messages to speak");
-            }
-        });
-        buttonsContainer.appendChild(speakButton);
-        
-        // Add reset button to fix stuck states
+        // Reset button
         const resetButton = document.createElement('button');
         resetButton.textContent = 'Reset';
-        resetButton.style.backgroundColor = '#FF5722'; // Orange/Red
+        resetButton.style.backgroundColor = '#ff5555';
         resetButton.style.color = 'white';
         resetButton.style.border = 'none';
         resetButton.style.borderRadius = '4px';
-        resetButton.style.padding = '4px 8px';
+        resetButton.style.padding = '2px 8px';
         resetButton.style.fontSize = '12px';
         resetButton.style.cursor = 'pointer';
-        resetButton.title = 'Use this if the microphone or speech gets stuck';
-        resetButton.addEventListener('click', () => {
+        resetButton.onclick = () => {
             console.log("AI Assistant: Manual reset triggered");
-            
-            // Cancel any speech synthesis
-            window.speechSynthesis.cancel();
-            
-            // Reset all flags
             this.isSpeaking = false;
             this.isListening = false;
-            this.micButtonPressed = false;
-            this.lastSpeechTimestamp = null;
             
-            // Abort speech recognition if active
-            if (this.recognition) {
-                try {
-                    this.recognition.abort();
-                } catch (error) {
-                    // Ignore errors during abort
-                    console.log("AI Assistant: Error during recognition abort:", error);
-                }
+            // Cancel any ongoing speech synthesis
+            if (window.speechSynthesis) {
+                window.speechSynthesis.cancel();
             }
             
-            // Reset UI elements
-            if (this.micButton) {
-                this.micButton.style.backgroundColor = '#4CAF50'; // Green
-                this.micButton.style.transform = '';
-                this.micButton.style.boxShadow = '';
+            // Stop any audio playback
+            if (this.audioPlayer) {
+                this.audioPlayer.pause();
+                this.audioPlayer.currentTime = 0;
             }
             
-            // Clear any speech timers
-            if (this.speechCheckTimer) {
-                clearTimeout(this.speechCheckTimer);
-                this.speechCheckTimer = null;
-            }
-            
-            // Update UI with confirmation
-            this.showMessage("Speech system reset complete");
-            
-            // Reset recognition status
-            this.showRecognitionStatus("Press and hold the mic button to speak");
-        });
-        buttonsContainer.appendChild(resetButton);
+            this.showMessage("Voice system reset");
+        };
         
-        // Add chat messages area
+        // Speak button
+        const speakButton = document.createElement('button');
+        speakButton.textContent = 'Speak Last';
+        speakButton.style.backgroundColor = '#4CAF50';
+        speakButton.style.color = 'white';
+        speakButton.style.border = 'none';
+        speakButton.style.borderRadius = '4px';
+        speakButton.style.padding = '2px 8px';
+        speakButton.style.fontSize = '12px';
+        speakButton.style.cursor = 'pointer';
+        speakButton.onclick = () => {
+            const lastMessage = this.findLastAssistantMessage();
+            if (lastMessage) {
+                if (this.isRealtimeMode) {
+                    this.showMessage("Cannot manually speak in realtime mode");
+                } else {
+                    this.speakText(lastMessage);
+                }
+            } else {
+                this.showMessage("No message to speak");
+            }
+        };
+        
+        // Add new Voice Mode toggle button
+        const modeToggleButton = document.createElement('button');
+        modeToggleButton.textContent = this.isRealtimeMode ? 'OpenAI Voice' : 'Browser Voice';
+        modeToggleButton.style.backgroundColor = this.isRealtimeMode ? '#2196F3' : '#9e9e9e';
+        modeToggleButton.style.color = 'white';
+        modeToggleButton.style.border = 'none';
+        modeToggleButton.style.borderRadius = '4px';
+        modeToggleButton.style.padding = '2px 8px';
+        modeToggleButton.style.fontSize = '12px';
+        modeToggleButton.style.cursor = 'pointer';
+        modeToggleButton.onclick = () => {
+            const isRealtime = this.toggleRealtimeMode();
+            modeToggleButton.textContent = isRealtime ? 'OpenAI Voice' : 'Browser Voice';
+            modeToggleButton.style.backgroundColor = isRealtime ? '#2196F3' : '#9e9e9e';
+        };
+        
+        // Add buttons to container
+        buttonsDiv.appendChild(modeToggleButton);
+        buttonsDiv.appendChild(speakButton);
+        buttonsDiv.appendChild(resetButton);
+        
+        // Add title and buttons to header
+        headerDiv.appendChild(title);
+        headerDiv.appendChild(buttonsDiv);
+        
+        // Chat messages area
         this.aiChatBox = document.createElement('div');
-        this.aiChatBox.style.padding = '10px';
-        this.aiChatBox.style.maxHeight = '200px';
+        this.aiChatBox.style.flex = '1';
         this.aiChatBox.style.overflowY = 'auto';
-        this.aiChatBox.style.color = 'white';
-        this.aiChatBox.style.fontSize = '14px';
-        this.chatContainer.appendChild(this.aiChatBox);
+        this.aiChatBox.style.maxHeight = '300px';
+        this.aiChatBox.style.marginBottom = '10px';
+        this.aiChatBox.style.paddingRight = '5px';
         
-        // Add styling for different message types
-        const style = document.createElement('style');
-        style.textContent = `
-            .ai-chat-message {
-                margin-bottom: 8px;
-                padding: 8px;
-                border-radius: 8px;
-                max-width: 80%;
-                word-wrap: break-word;
-            }
-            .ai-chat-message.user {
-                background-color: #2196F3;
-                align-self: flex-end;
-                margin-left: auto;
-            }
-            .ai-chat-message.assistant {
-                background-color: #4CAF50;
-                align-self: flex-start;
-            }
+        // Custom scrollbar styling
+        this.aiChatBox.style.scrollbarWidth = 'thin';
+        this.aiChatBox.style.scrollbarColor = 'rgba(76, 175, 80, 0.5) rgba(0, 0, 0, 0.1)';
+        
+        // Add an instructions card explaining how to use the AI assistant
+        const instructionsCard = document.createElement('div');
+        instructionsCard.style.backgroundColor = 'rgba(33, 150, 243, 0.2)';
+        instructionsCard.style.padding = '8px';
+        instructionsCard.style.borderRadius = '5px';
+        instructionsCard.style.marginBottom = '10px';
+        instructionsCard.style.fontSize = '12px';
+        instructionsCard.style.lineHeight = '1.4';
+        
+        const instructionsText = document.createElement('p');
+        instructionsText.style.margin = '0';
+        instructionsText.innerHTML = `
+            <strong>Instructions:</strong><br>
+            • Hold the microphone button to speak<br>
+            • Release when finished<br>
+            • The ${this.isRealtimeMode ? 'OpenAI' : 'browser'} voice will respond<br>
+            • Toggle voice mode with the button above
         `;
-        document.head.appendChild(style);
         
-        // Add microphone button for voice input
-        const controls = document.createElement('div');
-        controls.style.display = 'flex';
-        controls.style.padding = '10px';
-        controls.style.borderTop = '1px solid rgba(255, 255, 255, 0.2)';
-        this.chatContainer.appendChild(controls);
+        instructionsCard.appendChild(instructionsText);
         
-        this.micButton = document.createElement('button');
-        this.micButton.innerHTML = '🎤'; // Microphone emoji
-        this.micButton.style.backgroundColor = '#4CAF50';
-        this.micButton.style.color = 'white';
-        this.micButton.style.border = 'none';
-        this.micButton.style.borderRadius = '50%';
-        this.micButton.style.width = '50px';
-        this.micButton.style.height = '50px';
-        this.micButton.style.fontSize = '24px';
-        this.micButton.style.cursor = 'pointer';
-        this.micButton.style.margin = '0 auto';
-        this.micButton.style.boxShadow = '0 4px 8px rgba(0,0,0,0.3)';
-        this.micButton.style.transition = 'all 0.2s ease';
-        this.micButton.title = 'Press and hold to speak, release when done';
-        controls.appendChild(this.micButton);
+        // Microphone button at the bottom
+        const micButton = document.createElement('button');
+        micButton.textContent = '🎤 Hold to Talk';
+        micButton.style.backgroundColor = '#4CAF50';
+        micButton.style.color = 'white';
+        micButton.style.border = 'none';
+        micButton.style.borderRadius = '5px';
+        micButton.style.padding = '10px 15px';
+        micButton.style.fontSize = '14px';
+        micButton.style.cursor = 'pointer';
+        micButton.style.width = '100%';
+        micButton.style.transition = 'background-color 0.3s';
+        micButton.style.display = 'flex';
+        micButton.style.alignItems = 'center';
+        micButton.style.justifyContent = 'center';
         
-        // Add push-to-talk instruction text below the button
-        const instructionText = document.createElement('div');
-        instructionText.textContent = 'Press & hold to speak';
-        instructionText.style.color = 'white';
-        instructionText.style.fontSize = '12px';
-        instructionText.style.textAlign = 'center';
-        instructionText.style.marginTop = '5px';
-        instructionText.style.opacity = '0.8';
-        controls.appendChild(instructionText);
+        // Status indicator next to the button
+        const statusIndicator = document.createElement('div');
+        statusIndicator.style.width = '10px';
+        statusIndicator.style.height = '10px';
+        statusIndicator.style.backgroundColor = '#888';
+        statusIndicator.style.borderRadius = '50%';
+        statusIndicator.style.marginLeft = '10px';
+        statusIndicator.style.transition = 'background-color 0.3s';
         
-        // Add pulse animation to make the mic button more noticeable
-        const pulseStyle = document.createElement('style');
-        pulseStyle.textContent = `
-            @keyframes pulse {
-                0% { transform: scale(1); box-shadow: 0 4px 8px rgba(0,0,0,0.3); }
-                50% { transform: scale(1.05); box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
-                100% { transform: scale(1); box-shadow: 0 4px 8px rgba(0,0,0,0.3); }
+        micButton.appendChild(statusIndicator);
+        
+        // Status text below the button
+        const statusText = document.createElement('div');
+        statusText.style.textAlign = 'center';
+        statusText.style.fontSize = '12px';
+        statusText.style.marginTop = '5px';
+        statusText.style.height = '15px';
+        statusText.style.color = 'rgba(255, 255, 255, 0.7)';
+        statusText.textContent = '';
+        
+        let buttonPressStartTime = 0;
+        let buttonPressTimer = null;
+        
+        // Handle press and hold
+        micButton.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            if (this.isSpeaking) {
+                statusText.textContent = "Please wait for the AI to finish speaking";
+                return;
             }
-            #ai-chat-container button {
-                animation: pulse 2s infinite;
-            }
-            #ai-chat-container button:active {
-                transform: scale(0.95);
-                box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-            }
-        `;
-        document.head.appendChild(pulseStyle);
-        
-        // Replace with mousedown/mouseup listeners for push-to-talk
-        this.micButton.removeEventListener('click', () => {});
-        this.micButton.addEventListener('mousedown', () => {
-            console.log("AI Assistant: Microphone button pressed");
-            this.pressStartTime = Date.now();
-            this.micButtonPressed = true; // Add flag to track button state
-            this.startListening();
             
-            // Add a visual pulse effect to the button
-            this.micButton.style.transform = 'scale(1.1)';
-            this.micButton.style.boxShadow = '0 0 15px rgba(244, 67, 54, 0.7)';
+            buttonPressStartTime = Date.now();
+            micButton.style.backgroundColor = '#ff9800';
+            statusIndicator.style.backgroundColor = '#ff9800';
+            this.micButtonPressed = true;
+            
+            // Wait a short time before starting recording to avoid accidental clicks
+            buttonPressTimer = setTimeout(() => {
+                statusText.textContent = "Listening...";
+                this.startListening();
+            }, 300);
         });
-
-        this.micButton.addEventListener('mouseup', () => {
+        
+        // Handle release
+        micButton.addEventListener('mouseup', (e) => {
+            e.preventDefault();
+            const pressDuration = Date.now() - buttonPressStartTime;
+            console.log(`AI Assistant: Button held for ${pressDuration}ms`);
+            
+            micButton.style.backgroundColor = '#4CAF50';
+            statusIndicator.style.backgroundColor = '#888';
+            this.micButtonPressed = false;
+            
+            if (buttonPressTimer) {
+                clearTimeout(buttonPressTimer);
+            }
+            
+            if (pressDuration < 300) {
+                statusText.textContent = "Press and hold to speak";
+                return;
+            }
+            
+            statusText.textContent = "Processing...";
             console.log("AI Assistant: Microphone button released");
-            const pressDuration = Date.now() - this.pressStartTime;
-            console.log(`AI Assistant: Button held for ${pressDuration}ms`);
             
-            // Reset button styling
-            this.micButton.style.transform = '';
-            this.micButton.style.boxShadow = '';
+            // Get the current transcript for immediate feedback
+            const currentText = this.currentTranscript;
+            console.log("AI Assistant: Processing transcript after button release:", currentText);
             
-            this.micButtonPressed = false; // Clear the flag when button is released
+            // Stop listening, which will trigger processing
             this.stopListening();
             
-            // Process the speech after button release with minimum duration check
-            if (this.currentTranscript && this.currentTranscript.trim() !== '') {
-                console.log("AI Assistant: Processing transcript after button release:", this.currentTranscript);
-                this.handleUserInput(this.currentTranscript);
-                this.currentTranscript = '';
-            } else if (pressDuration < this.minSpeechDuration) {
-                console.log("AI Assistant: Button press too short, might be accidental");
-                this.showMessage("Please hold the button longer while speaking");
+            if (currentText && currentText.trim() !== '') {
+                // The transcript will be processed by the recognition end event
+                statusText.textContent = "Thinking...";
             } else {
-                console.log("AI Assistant: No speech detected");
-                this.showMessage("No speech detected. Try again and speak clearly.");
-            }
-        });
-
-        // Add touchstart/touchend support for mobile devices
-        this.micButton.addEventListener('touchstart', (e) => {
-            e.preventDefault(); // Prevent default touch behavior
-            console.log("AI Assistant: Microphone button touched");
-            this.pressStartTime = Date.now();
-            this.startListening();
-            
-            // Add a visual pulse effect to the button
-            this.micButton.style.transform = 'scale(1.1)';
-            this.micButton.style.boxShadow = '0 0 15px rgba(244, 67, 54, 0.7)';
-        });
-
-        this.micButton.addEventListener('touchend', (e) => {
-            e.preventDefault(); // Prevent default touch behavior
-            console.log("AI Assistant: Microphone touch released");
-            const pressDuration = Date.now() - this.pressStartTime;
-            console.log(`AI Assistant: Button held for ${pressDuration}ms`);
-            
-            // Reset button styling
-            this.micButton.style.transform = '';
-            this.micButton.style.boxShadow = '';
-            
-            this.stopListening();
-            
-            // Process the speech after button release with minimum duration check
-            if (this.currentTranscript && this.currentTranscript.trim() !== '') {
-                console.log("AI Assistant: Processing transcript after touch release:", this.currentTranscript);
-                this.handleUserInput(this.currentTranscript);
-                this.currentTranscript = '';
-            } else if (pressDuration < this.minSpeechDuration) {
-                console.log("AI Assistant: Touch too short, might be accidental");
-                this.showMessage("Please hold longer while speaking");
-            } else {
-                console.log("AI Assistant: No speech detected after touch");
-                this.showMessage("No speech detected. Try again and speak clearly.");
+                statusText.textContent = "No speech detected";
+                setTimeout(() => {
+                    statusText.textContent = "";
+                }, 2000);
             }
         });
         
-        // Add a large initial instruction card that fades after a few seconds
-        const instructionCard = document.createElement('div');
-        instructionCard.style.position = 'absolute';
-        instructionCard.style.top = '50%';
-        instructionCard.style.left = '50%';
-        instructionCard.style.transform = 'translate(-50%, -50%)';
-        instructionCard.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
-        instructionCard.style.color = 'white';
-        instructionCard.style.padding = '20px';
-        instructionCard.style.borderRadius = '10px';
-        instructionCard.style.boxShadow = '0 0 20px rgba(77, 105, 255, 0.7)';
-        instructionCard.style.zIndex = '2000';
-        instructionCard.style.textAlign = 'center';
-        instructionCard.style.maxWidth = '80%';
-        instructionCard.style.transition = 'opacity 1s ease-in-out';
+        // Also handle touch events for mobile devices
+        micButton.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (this.isSpeaking) {
+                statusText.textContent = "Please wait for the AI to finish speaking";
+                return;
+            }
+            
+            buttonPressStartTime = Date.now();
+            micButton.style.backgroundColor = '#ff9800';
+            statusIndicator.style.backgroundColor = '#ff9800';
+            this.micButtonPressed = true;
+            
+            buttonPressTimer = setTimeout(() => {
+                statusText.textContent = "Listening...";
+                this.startListening();
+            }, 300);
+        });
         
-        const titleInstruction = document.createElement('h2');
-        titleInstruction.textContent = 'Push-to-Talk Instructions';
-        titleInstruction.style.color = '#4d69ff';
-        titleInstruction.style.marginBottom = '15px';
-        instructionCard.appendChild(titleInstruction);
+        micButton.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            const pressDuration = Date.now() - buttonPressStartTime;
+            console.log(`AI Assistant: Button held for ${pressDuration}ms`);
+            
+            micButton.style.backgroundColor = '#4CAF50';
+            statusIndicator.style.backgroundColor = '#888';
+            this.micButtonPressed = false;
+            
+            if (buttonPressTimer) {
+                clearTimeout(buttonPressTimer);
+            }
+            
+            if (pressDuration < 300) {
+                statusText.textContent = "Press and hold to speak";
+                return;
+            }
+            
+            statusText.textContent = "Processing...";
+            
+            // Get the current transcript
+            const currentText = this.currentTranscript;
+            
+            // Stop listening, which will trigger processing
+            this.stopListening();
+            
+            if (currentText && currentText.trim() !== '') {
+                statusText.textContent = "Thinking...";
+            } else {
+                statusText.textContent = "No speech detected";
+                setTimeout(() => {
+                    statusText.textContent = "";
+                }, 2000);
+            }
+        });
         
-        const instructions = document.createElement('p');
-        instructions.innerHTML = '1. <strong>Press and hold</strong> the microphone button<br>' +
-                               '2. <strong>Speak</strong> while holding the button<br>' +
-                               '3. <strong>Release</strong> when you\'re done speaking<br><br>' +
-                               'This will send your voice to the AI assistant.';
-        instructions.style.lineHeight = '1.5';
-        instructions.style.fontSize = '16px';
-        instructionCard.appendChild(instructions);
+        // Store references
+        this.micButton = micButton;
+        this.statusIndicator = statusIndicator;
+        this.statusText = statusText;
         
-        document.body.appendChild(instructionCard);
+        // Build the UI
+        this.chatContainer.innerHTML = '';
+        this.chatContainer.appendChild(headerDiv);
+        this.chatContainer.appendChild(instructionsCard);
+        this.chatContainer.appendChild(this.aiChatBox);
+        this.chatContainer.appendChild(micButton);
+        this.chatContainer.appendChild(statusText);
         
-        // Fade out and remove after 8 seconds
-        setTimeout(() => {
-            instructionCard.style.opacity = '0';
-            setTimeout(() => {
-                if (document.body.contains(instructionCard)) {
-                    document.body.removeChild(instructionCard);
-                }
-            }, 1000);
-        }, 8000);
+        // Add to document
+        document.body.appendChild(this.chatContainer);
+        
+        // Initialize
+        this.updateChatDisplay();
         
         // Add welcome message
         this.addMessageToConversation("assistant", "Hello! I'm your AI assistant. I can help with your Pong game or we can chat about anything you'd like to discuss.");
         
         console.log("AI Assistant: Chat UI created");
-        
-        // Initialize speech recognition
-        this.initSpeechRecognition();
-        
-        // Show push-to-talk instructions the first time
-        this.showRecognitionStatus("Press and hold the mic button to speak");
     }
     
     initSpeechRecognition() {
-        // Check if speech recognition is available
-        if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
-            console.log("AI Assistant: Speech recognition API is available, initializing...");
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            this.recognition = new SpeechRecognition();
-            
-            // Configure for push-to-talk
-            this.recognition.continuous = true; // Changed to true to keep recognition active during button press
-            this.recognition.interimResults = true;
-            this.recognition.maxAlternatives = 1;
-            this.recognition.lang = 'en-US';
-            
-            this.recognition.onstart = () => {
-                console.log("AI Assistant: Speech recognition started");
-                this.isListening = true;
-                this.micButton.style.backgroundColor = '#F44336';  // Red when listening
-                this.showRecognitionStatus("Listening... Release when done speaking");
-            };
-            
-            this.recognition.onresult = (event) => {
-                let finalTranscript = '';
-                let interimTranscript = '';
-                
-                // Process all results, distinguishing between final and interim
-                for (let i = event.resultIndex; i < event.results.length; i++) {
-                    if (event.results[i].isFinal) {
-                        finalTranscript += event.results[i][0].transcript;
-                        console.log('AI Assistant: Final transcript:', finalTranscript);
-                    } else {
-                        interimTranscript += event.results[i][0].transcript;
-                        console.log('AI Assistant: Interim transcript:', interimTranscript);
-                        
-                        // Add visual feedback for interim results - use the new method for better visibility
-                        this.showRecognitionStatus(`I heard: "${interimTranscript}"`);
-                    }
-                }
-                
-                // Store the transcript but don't process it yet
-                if (finalTranscript !== '') {
-                    this.currentTranscript = finalTranscript;
-                    console.log('AI Assistant: Saved final transcript:', this.currentTranscript);
-                    this.micButton.style.backgroundColor = '#9C27B0'; // Purple when speech is recognized
-                } else if (interimTranscript !== '') {
-                    this.currentTranscript = interimTranscript;
-                    console.log('AI Assistant: Saved interim transcript:', this.currentTranscript);
-                }
-            };
-            
-            this.recognition.onerror = (event) => {
-                console.error('AI Assistant: Speech recognition error:', event.error);
-                if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-                    this.showMessage("Microphone permission denied. Please allow microphone access.");
-                    // Try to request permission explicitly
-                    this.requestMicrophonePermission();
-                } else if (event.error === 'no-speech') {
-                    // Don't show a message for no-speech when holding the button
-                    console.log("AI Assistant: No speech detected, but continuing to listen");
-                    // Restart recognition if it stopped due to no speech
-                    if (this.isListening && this.micButtonPressed) {
-                        this.startListeningInternal();
-                    }
-                } else {
-                    this.showMessage("Speech recognition error: " + event.error);
-                }
-                
-                // Only reset if we're not still holding the button
-                if (!this.micButtonPressed) {
-                    this.isListening = false;
-                    this.micButton.style.backgroundColor = '#4CAF50';
-                }
-            };
-            
-            this.recognition.onend = () => {
-                console.log("AI Assistant: Speech recognition ended");
-                
-                // If the button is still pressed, restart recognition immediately
-                if (this.micButtonPressed) {
-                    console.log("AI Assistant: Button still pressed, restarting recognition");
-                    this.startListeningInternal();
-                } else {
-                    this.isListening = false;
-                    this.micButton.style.backgroundColor = '#4CAF50';
-                }
-            };
-            
-            console.log('AI Assistant: Speech recognition initialized successfully');
-            
-            // Check for microphone permission
-            this.requestMicrophonePermission();
-        } else {
-            console.error('AI Assistant: Speech recognition not supported in this browser');
-            this.showMessage("Voice input not supported in your browser.");
-        }
-    }
-    
-    // Request microphone permission explicitly
-    requestMicrophonePermission() {
-        console.log("AI Assistant: Requesting microphone permission");
-        navigator.mediaDevices.getUserMedia({ audio: true })
-            .then(stream => {
-                console.log("AI Assistant: Microphone permission granted");
-                this.showMessage("Microphone access granted. Voice chat is ready.");
-                // Stop the tracks to release the microphone
-                stream.getTracks().forEach(track => track.stop());
-            })
-            .catch(err => {
-                console.error("AI Assistant: Microphone permission denied:", err);
-                this.showMessage("Please allow microphone access for voice chat to work.");
-            });
-    }
-    
-    startListening() {
-        console.log("AI Assistant: Start listening called. isInitialized:", this.isInitialized, "useServerSide:", this.useServerSide, "isSpeaking:", this.isSpeaking);
-        
-        // If using client-side mode, require initialization
-        if (!this.isInitialized && !this.useServerSide) {
-            this.showMessage("AI assistant not initialized. Please set up your API key.");
+        if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+            console.error("AI Assistant: Speech recognition not supported in this browser");
+            this.showMessage("Speech recognition is not supported in your browser. Please try Chrome or Edge.");
             return;
         }
         
-        // Debug and force reset isSpeaking if it's been stuck
-        if (this.isSpeaking) {
-            console.log("AI Assistant: isSpeaking is true, may be stuck. Last speech activity was over 10 seconds ago?");
+        // Create speech recognition object
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        this.recognition = new SpeechRecognition();
+        
+        // Configure the recognition
+        this.recognition.continuous = false;
+        this.recognition.lang = 'en-US';
+        this.recognition.interimResults = true;
+        this.recognition.maxAlternatives = 1;
+        
+        // Set up event handlers
+        this.recognition.onstart = () => {
+            console.log("AI Assistant: Recognition started");
+            this.isListening = true;
+            this.currentTranscript = '';
+        };
+        
+        this.recognition.onresult = (event) => {
+            const result = event.results[0];
+            const transcript = result[0].transcript;
             
-            // Check if there was any recent speech activity (over 10 seconds ago)
-            if (!this.lastSpeechTimestamp || (Date.now() - this.lastSpeechTimestamp > 10000)) {
-                console.log("AI Assistant: Forcing reset of isSpeaking flag");
-                this.isSpeaking = false;
+            // Update the current transcript
+            this.currentTranscript = transcript;
+            
+            if (result.isFinal) {
+                console.log("AI Assistant: Final transcript:", transcript);
+                this.showRecognitionStatus("Recognized: " + transcript);
+                this.currentTranscript = transcript;
+                this.lastFinalTranscript = transcript;
             } else {
-                this.showMessage("Please wait until I finish speaking.");
-                return;
+                console.log("AI Assistant: Interim transcript:", transcript);
+                this.showRecognitionStatus("Listening: " + transcript);
+            }
+        };
+        
+        this.recognition.onerror = (event) => {
+            console.error("AI Assistant: Recognition error:", event.error);
+            this.isListening = false;
+            
+            if (event.error === 'not-allowed') {
+                this.showMessage("Microphone access was denied. Please allow microphone access in your browser settings.");
+            } else if (event.error === 'network') {
+                this.showMessage("Network error occurred. Please check your connection.");
+            } else {
+                this.showMessage(`Speech recognition error: ${event.error}`);
+            }
+        };
+        
+        this.recognition.onend = () => {
+            console.log("AI Assistant: Speech recognition ended");
+            this.isListening = false;
+            
+            // Process the final transcript if it's not empty
+            if (this.lastFinalTranscript && this.lastFinalTranscript.trim() !== '') {
+                if (!this.isRealtimeMode) {
+                    // Use text-based chat in traditional mode
+                    this.handleUserInput(this.lastFinalTranscript);
+                }
+                this.lastFinalTranscript = ''; // Clear after processing
+            } else if (this.currentTranscript && this.currentTranscript.trim() !== '') {
+                // Use the current transcript as fallback if no final was captured
+                if (!this.isRealtimeMode) {
+                    // Use text-based chat in traditional mode
+                    this.handleUserInput(this.currentTranscript);
+                }
+            }
+            
+            this.currentTranscript = ''; // Clear after processing
+        };
+        
+        console.log("AI Assistant: Speech recognition initialized");
+    }
+    
+    // Fix the requestMicrophonePermission method to return a Promise
+    requestMicrophonePermission() {
+        console.log("AI Assistant: Requesting microphone permission");
+        
+        return new Promise((resolve, reject) => {
+            // Check if we already have permission
+            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                navigator.mediaDevices.getUserMedia({ audio: true })
+                    .then(stream => {
+                        // Stop the stream immediately, we just wanted to check permission
+                        stream.getTracks().forEach(track => track.stop());
+                        console.log("AI Assistant: Microphone permission granted");
+                        resolve();
+                    })
+                    .catch(error => {
+                        console.error("AI Assistant: Microphone permission denied:", error);
+                        reject(error);
+                    });
+            } else {
+                console.error("AI Assistant: getUserMedia not supported in this browser");
+                reject(new Error("getUserMedia not supported"));
+            }
+        });
+    }
+    
+    startListening() {
+        if (this.isListening || this.isSpeaking) {
+            if (this.isSpeaking) {
+                this.showMessage("Please wait till I finish speaking");
+            }
+            return;
+        }
+        
+        console.log("AI Assistant: Starting listening, isListening =", this.isListening);
+        
+        // If there's no socket connection, try to connect
+        if (!this.socket && this.isRealtimeMode) {
+            const connected = this.connectToServer();
+            if (!connected) {
+                console.warn("AI Assistant: Cannot use realtime mode without server connection");
+                this.isRealtimeMode = false;
+                this.showMessage("Switched to traditional mode - server connection not available");
             }
         }
         
-        // Initialize the current transcript
-        this.currentTranscript = '';
+        if (!this.isInitialized) {
+            console.warn("AI Assistant: Can't start listening, not initialized");
+            this.showMessage("Please set up the OpenAI API key first");
+            return;
+        }
         
-        // Start listening
-        this.startListeningInternal();
+        // Request microphone permission first
+        this.requestMicrophonePermission()
+            .then(() => {
+                // If we're in realtime mode, use the audio recording
+                if (this.isRealtimeMode) {
+                    try {
+                        this.startAudioRecording();
+                    } catch (error) {
+                        console.error("AI Assistant: Error starting audio recording:", error);
+                        this.showMessage("Error starting audio recording. Switching to traditional mode.");
+                        this.isRealtimeMode = false;
+                        
+                        // Initialize speech recognition if needed
+                        if (!this.recognition) {
+                            this.initSpeechRecognition();
+                        }
+                        
+                        // Try with traditional mode
+                        this.startListeningInternal();
+                    }
+                } else {
+                    // Initialize speech recognition if needed
+                    if (!this.recognition) {
+                        this.initSpeechRecognition();
+                    }
+                    
+                    // Use traditional speech recognition
+                    this.startListeningInternal();
+                }
+            })
+            .catch(error => {
+                console.error("AI Assistant: Microphone permission error:", error);
+                this.showMessage("Microphone access denied. Please allow microphone access and try again.");
+            });
     }
     
     startListeningInternal() {
@@ -831,70 +896,72 @@ export class AIAssistant {
     stopListening() {
         console.log("AI Assistant: Stopping listening, current transcript:", this.currentTranscript);
         
-        if (this.recognition && this.isListening) {
-            // Add a tiny delay before stopping to ensure any in-progress recognition completes
-            setTimeout(() => {
+        if (!this.isListening) {
+            return;
+        }
+        
+        if (this.isRealtimeMode) {
+            this.stopAudioRecording();
+        } else {
+            // Original speech recognition stoppage
+            if (this.recognition) {
                 try {
                     this.recognition.stop();
                     console.log("AI Assistant: Recognition stopped");
                 } catch (error) {
-                    console.error("Error stopping recognition:", error);
+                    console.error("AI Assistant: Error stopping recognition:", error);
                 }
-            }, 200);  // Small delay to let any final results come through
-        }
-        
-        this.isListening = false;
-        if (this.micButton) {
-            this.micButton.style.backgroundColor = '#4CAF50';
+            }
         }
     }
     
     // Handle user input (text or transcribed speech)
     async handleUserInput(text) {
-        if (!text || text.trim() === "") {
+        if (!text || text.trim() === '') {
             console.log("AI Assistant: Empty input received, ignoring");
             return;
         }
         
-        const cleanedText = text.trim();
-        console.log(`AI Assistant: Received user input: "${cleanedText}"`);
+        console.log("AI Assistant: Received user input:", text);
         
-        // Show a temporary "typing" message
-        this.showMessage("Processing your request...");
+        // Add the user message to the conversation
+        this.addMessageToConversation('user', text);
         
-        // Add user message to conversation
-        this.addMessageToConversation("user", cleanedText);
+        // If we're already in realtime mode, and the audio was just sent via sendAudioToServer,
+        // we don't need to do anything else here, as the openai-realtime-response handler will
+        // take care of updating the UI with the response
         
-        if (this.useServerSide && this.socket) {
-            // Send to server for processing
-            console.log("AI Assistant: Sending message to server for processing via socket.io");
-            
-            // Show typing indicator
-            this.addMessageToConversation("assistant", "...");
-            
-            try {
-                this.socket.emit('openai-chat', { message: cleanedText });
-                console.log("AI Assistant: Message sent to server successfully");
-            } catch (error) {
-                console.error("AI Assistant: Error sending message to server:", error);
-                this.updateLastAssistantMessage("Sorry, I encountered an error communicating with the server. Please try again.");
+        // Only send text-based requests in traditional mode or if we're not using audio recording
+        if (!this.isRealtimeMode) {
+            // If there's no socket, try to connect
+            if (!this.socket) {
+                const connected = this.connectToServer();
+                if (!connected) {
+                    this.showMessage("Cannot connect to server. Using local fallback.");
+                    
+                    // Local fallback response
+                    this.addMessageToConversation('assistant', "I'm sorry, I can't connect to the server right now. Please check your connection and try again.");
+                    return;
+                }
             }
-        } else if (this.isInitialized && this.apiKey) {
-            // Process client-side with API key
-            try {
-                // Simulate response for now
-                const response = "I'm sorry, but I'm currently operating in client-side mode without a direct connection to OpenAI. For full functionality, please restart the server with an API key.";
+            
+            // Process server side if we have a socket connection
+            if (this.socket) {
+                console.log("AI Assistant: Sending message to server for processing via socket.io");
                 
-                this.addMessageToConversation("assistant", response);
-                this.speakText(response);
-            } catch (error) {
-                console.error("AI Assistant: Error processing message:", error);
-                this.addMessageToConversation("assistant", "I'm sorry, I encountered an error processing your request.");
+                // Add a placeholder message for the assistant response
+                this.addMessageToConversation('assistant', '...');
+                
+                // Send the message to the server
+                this.socket.emit('openai-chat', { message: text });
+                console.log("AI Assistant: Message sent to server successfully");
+            } else {
+                console.error("AI Assistant: No socket connection available for sending message");
+                this.showMessage("Error: Cannot connect to the server");
+                
+                // Add an error message for feedback
+                this.updateLastAssistantMessage("Sorry, I'm having trouble connecting to the server. Please check your connection and try again.");
             }
-        } else {
-            // Fallback for when not initialized
-            const fallbackResponse = "I'm not fully initialized yet. Please provide an OpenAI API key or restart the server with an API key.";
-            this.addMessageToConversation("assistant", fallbackResponse);
         }
     }
     
@@ -1371,5 +1438,298 @@ export class AIAssistant {
         }
         
         return null;
+    }
+    
+    // New method for recording audio for OpenAI's API
+    startAudioRecording() {
+        console.log("AI Assistant: Starting audio recording for realtime mode");
+        this.isListening = true;
+        this.showRecognitionStatus("Listening...");
+        
+        // Reset recorded chunks
+        this.recordedChunks = [];
+        
+        // Get audio stream
+        navigator.mediaDevices.getUserMedia({ audio: true })
+            .then(stream => {
+                this.audioStream = stream;
+                
+                try {
+                    // Create media recorder with appropriate mime type
+                    const options = { mimeType: 'audio/webm' };
+                    this.mediaRecorder = new MediaRecorder(stream, options);
+                    
+                    // Listen for data available events
+                    this.mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0) {
+                            this.recordedChunks.push(event.data);
+                        }
+                    };
+                    
+                    // When recording stops, send the audio to the server
+                    this.mediaRecorder.onstop = () => {
+                        this.sendAudioToServer();
+                    };
+                    
+                    // Start recording - collect data every 1 second
+                    this.mediaRecorder.start(1000);
+                    console.log("AI Assistant: Media recorder started successfully");
+                } catch (error) {
+                    console.error("AI Assistant: Error creating MediaRecorder:", error);
+                    this.isListening = false;
+                    this.showMessage("Error recording audio: " + error.message);
+                    
+                    // Clean up the stream
+                    if (this.audioStream) {
+                        this.audioStream.getTracks().forEach(track => track.stop());
+                        this.audioStream = null;
+                    }
+                }
+            })
+            .catch(error => {
+                console.error("AI Assistant: Error accessing microphone:", error);
+                this.isListening = false;
+                this.showMessage("Error accessing microphone: " + error.message);
+            });
+    }
+    
+    // New method to stop recording and send audio to server
+    stopAudioRecording() {
+        console.log("AI Assistant: Stopping audio recording");
+        if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+            this.mediaRecorder.stop();
+        }
+        
+        if (this.audioStream) {
+            this.audioStream.getTracks().forEach(track => track.stop());
+            this.audioStream = null;
+        }
+    }
+    
+    // New method to send recorded audio to the server
+    sendAudioToServer() {
+        if (this.recordedChunks.length === 0) {
+            console.warn("AI Assistant: No audio recorded");
+            this.isListening = false;
+            this.showMessage("No audio recorded. Please try again.");
+            return;
+        }
+        
+        console.log("AI Assistant: Sending audio to server");
+        this.showRecognitionStatus("Processing...");
+        
+        // If there's no socket, try to connect
+        if (!this.socket) {
+            const connected = this.connectToServer();
+            if (!connected) {
+                console.warn("AI Assistant: Cannot use realtime mode without server connection");
+                this.isRealtimeMode = false;
+                this.showMessage("Switched to traditional mode - server connection not available");
+                
+                // Clean up
+                this.isListening = false;
+                this.recordedChunks = [];
+                return;
+            }
+        }
+        
+        try {
+            // Convert recorded chunks to a blob
+            let audioBlob;
+            try {
+                audioBlob = new Blob(this.recordedChunks, { type: 'audio/webm' });
+            } catch (e) {
+                console.error("AI Assistant: Error creating audio blob:", e);
+                // Try a different MIME type as fallback
+                audioBlob = new Blob(this.recordedChunks, { type: 'audio/ogg; codecs=opus' });
+            }
+            
+            // Convert blob to base64
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                try {
+                    const base64Audio = reader.result;
+                    
+                    // Send to server via socket.io
+                    if (this.socket) {
+                        // Add a placeholder message for the assistant's response
+                        this.addMessageToConversation('user', '...');
+                        
+                        // Send the audio data to the server
+                        this.socket.emit('openai-audio-chat', { audio: base64Audio });
+                        console.log("AI Assistant: Audio sent to server");
+                        
+                        // Reset status
+                        this.isListening = false;
+                        this.recordedChunks = [];
+                    } else {
+                        console.error("AI Assistant: No socket available to send audio");
+                        this.isListening = false;
+                        this.showMessage("Cannot connect to server. Please try again.");
+                        
+                        // Fall back to text mode if possible
+                        if (!this.isRealtimeMode) {
+                            this.toggleRealtimeMode();
+                        }
+                    }
+                } catch (error) {
+                    console.error("AI Assistant: Error converting or sending audio:", error);
+                    this.isListening = false;
+                    this.showMessage("Error processing audio. Please try again.");
+                }
+            };
+            
+            reader.onerror = (error) => {
+                console.error("AI Assistant: Error reading audio data:", error);
+                this.isListening = false;
+                this.showMessage("Error reading audio data. Please try again.");
+            };
+            
+            reader.readAsDataURL(audioBlob);
+        } catch (error) {
+            console.error("AI Assistant: Error processing audio chunks:", error);
+            this.isListening = false;
+            this.showMessage("Error processing audio. Please try again.");
+        }
+    }
+    
+    // New method to play audio from OpenAI
+    playOpenAIAudio(audioBase64) {
+        console.log("AI Assistant: Playing OpenAI generated audio");
+        this.isSpeaking = true;
+        
+        // Play the audio
+        this.audioPlayer.src = audioBase64;
+        
+        // Set up event listeners
+        this.audioPlayer.onplay = () => {
+            console.log("AI Assistant: OpenAI audio playback started");
+        };
+        
+        this.audioPlayer.onended = () => {
+            console.log("AI Assistant: OpenAI audio playback ended");
+            this.isSpeaking = false;
+        };
+        
+        this.audioPlayer.onerror = (e) => {
+            console.error("AI Assistant: Error playing OpenAI audio:", e);
+            this.isSpeaking = false;
+        };
+        
+        // Start playback
+        this.audioPlayer.play().catch(error => {
+            console.error("AI Assistant: Failed to play audio:", error);
+            this.isSpeaking = false;
+            
+            // Try to autoplay by adding a user interaction event listener
+            const resumeAudio = () => {
+                this.audioPlayer.play();
+                document.removeEventListener('click', resumeAudio);
+            };
+            document.addEventListener('click', resumeAudio);
+        });
+    }
+    
+    // Add a toggle method to switch between realtime and traditional modes
+    toggleRealtimeMode() {
+        // Make sure any ongoing processes are stopped
+        if (this.isListening) {
+            if (this.isRealtimeMode) {
+                this.stopAudioRecording();
+            } else if (this.recognition) {
+                try {
+                    this.recognition.stop();
+                } catch (e) {
+                    console.error("AI Assistant: Error stopping recognition:", e);
+                }
+            }
+            this.isListening = false;
+        }
+        
+        if (this.isSpeaking) {
+            // Stop any ongoing speech
+            if (window.speechSynthesis) {
+                window.speechSynthesis.cancel();
+            }
+            
+            if (this.audioPlayer) {
+                this.audioPlayer.pause();
+                this.audioPlayer.currentTime = 0;
+            }
+            this.isSpeaking = false;
+        }
+        
+        // Toggle the mode
+        this.isRealtimeMode = !this.isRealtimeMode;
+        console.log(`AI Assistant: Switched to ${this.isRealtimeMode ? 'realtime' : 'traditional'} mode`);
+        
+        const modeMessage = this.isRealtimeMode 
+            ? "Switched to OpenAI realtime voice mode" 
+            : "Switched to traditional voice mode";
+        this.showMessage(modeMessage);
+        
+        // If we're in traditional mode, make sure speech recognition is initialized
+        if (!this.isRealtimeMode && !this.recognition) {
+            this.initSpeechRecognition();
+        }
+        
+        return this.isRealtimeMode;
+    }
+    
+    // New method to check speech compatibility
+    checkSpeechCompatibility() {
+        // Check Web Speech API support
+        const speechRecognitionSupported = 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
+        console.log(`AI Assistant: Speech recognition is ${speechRecognitionSupported ? 'supported' : 'not supported'}`);
+        
+        // Check MediaRecorder support (for realtime mode)
+        let mediaRecorderSupported = false;
+        try {
+            mediaRecorderSupported = 'MediaRecorder' in window;
+        } catch (e) {
+            console.error("AI Assistant: Error checking MediaRecorder support:", e);
+        }
+        console.log(`AI Assistant: MediaRecorder is ${mediaRecorderSupported ? 'supported' : 'not supported'}`);
+        
+        // Initialize speech recognition if supported
+        if (speechRecognitionSupported) {
+            this.initSpeechRecognition();
+        }
+        
+        // Set initial mode based on compatibility
+        this.isRealtimeMode = mediaRecorderSupported && speechRecognitionSupported;
+    }
+    
+    // Add a method to connect to the socket manually
+    connectToServer() {
+        // If we already have a socket, don't reconnect
+        if (this.socket) {
+            console.log("AI Assistant: Already connected to server");
+            return;
+        }
+        
+        console.log("AI Assistant: Attempting to connect to server manually");
+        try {
+            // Try to connect to the server
+            const socketIo = window.io || io;
+            if (socketIo) {
+                this.socket = socketIo();
+                console.log("AI Assistant: Connected to server manually");
+                
+                // Set up socket listeners
+                this.setupSocketListeners();
+                
+                // Mark as initialized with server-side processing
+                this.useServerSide = true;
+                this.isInitialized = true;
+                
+                return true;
+            }
+        } catch (error) {
+            console.error("AI Assistant: Failed to connect to server manually:", error);
+        }
+        
+        console.error("AI Assistant: Could not connect to server, socket.io not available");
+        return false;
     }
 } 

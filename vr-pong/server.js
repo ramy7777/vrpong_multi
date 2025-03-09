@@ -1,9 +1,13 @@
 const express = require('express');
 const https = require('https');
+const http = require('http');
 const path = require('path');
 const selfsigned = require('selfsigned');
 const socketIo = require('socket.io');
 const OpenAI = require('openai');
+const fs = require('fs');
+const { Readable } = require('stream');
+const os = require('os');
 
 // Initialize variables for OpenAI
 let openaiClient = null;
@@ -25,6 +29,9 @@ if (openaiApiKey) {
 
 // Game rooms storage
 const gameRooms = {};
+
+// Add this at the top of the file where other variables are declared
+const userChatHistories = {}; // Store chat histories for each user
 
 const app = express();
 app.use(express.static('./'));
@@ -440,6 +447,11 @@ io.on('connection', (socket) => {
                 break;
             }
         }
+        
+        // Clean up chat history
+        if (userChatHistories[socket.id]) {
+            delete userChatHistories[socket.id];
+        }
     });
     
     // Handle OpenAI chat requests
@@ -454,15 +466,35 @@ io.on('connection', (socket) => {
         
         try {
             console.log(`Processing OpenAI request for ${socket.id}`);
+            
+            // Initialize chat history if it doesn't exist
+            if (!userChatHistories[socket.id]) {
+                userChatHistories[socket.id] = [
+                    { role: "system", content: "You are a friendly and helpful AI assistant in a VR Pong game environment. While you can provide tips and guidance about the game, you're also capable of having general conversations on a wide range of topics. Be engaging, informative, and personable." }
+                ];
+            }
+            
+            // Add user message to history
+            userChatHistories[socket.id].push({ role: "user", content: data.message });
+            
+            // Limit history to last 10 messages to prevent context overflow
+            if (userChatHistories[socket.id].length > 11) { // 1 system + 10 messages
+                userChatHistories[socket.id] = [
+                    userChatHistories[socket.id][0], // Keep system message
+                    ...userChatHistories[socket.id].slice(-10) // Keep last 10 messages
+                ];
+            }
+            
             const completion = await openaiClient.chat.completions.create({
-                messages: [
-                    { role: "system", content: "You are a friendly and helpful AI assistant in a VR Pong game environment. While you can provide tips and guidance about the game, you're also capable of having general conversations on a wide range of topics. Be engaging, informative, and personable." },
-                    { role: "user", content: data.message }
-                ],
-                model: "gpt-3.5-turbo",
+                messages: userChatHistories[socket.id],
+                model: "gpt-4o-mini",
             });
             
             const response = completion.choices[0].message.content;
+            
+            // Add assistant response to history
+            userChatHistories[socket.id].push({ role: "assistant", content: response });
+            
             console.log(`Sending response to ${socket.id}: ${response.substring(0, 50)}...`);
             socket.emit('openai-response', { response });
         } catch (error) {
@@ -524,7 +556,7 @@ io.on('connection', (socket) => {
             // Test the API key with a simple completion to verify it works
             openaiClient.chat.completions.create({
                 messages: [{ role: "system", content: "You are a friendly and helpful AI assistant capable of general conversation as well as providing guidance for a VR Pong game." }],
-                model: "gpt-3.5-turbo",
+                model: "gpt-4o-mini",
                 max_tokens: 5
             }).then(() => {
                 console.log(`API key for ${socket.id} verified successfully`);
@@ -540,9 +572,128 @@ io.on('connection', (socket) => {
             });
         }
     });
+
+    // Handle OpenAI realtime audio chat
+    socket.on('openai-audio-chat', async (data) => {
+        console.log(`Received audio chat request from ${socket.id}`);
+        
+        if (!openaiClient) {
+            console.log(`No OpenAI client available for ${socket.id}, notifying client`);
+            socket.emit('openai-error', { error: 'OpenAI not initialized. Please provide an API key.' });
+            return;
+        }
+        
+        try {
+            // Create a temporary file with the audio data
+            const tempDir = os.tmpdir();
+            const tempFilePath = path.join(tempDir, `audio-${socket.id}-${Date.now()}.webm`);
+            
+            // Write base64 audio to file
+            const audioBuffer = base64ToBuffer(data.audio);
+            fs.writeFileSync(tempFilePath, audioBuffer);
+            
+            console.log(`Created temporary audio file at ${tempFilePath} for ${socket.id}`);
+            
+            // Initialize chat history if it doesn't exist
+            if (!userChatHistories[socket.id]) {
+                userChatHistories[socket.id] = [
+                    { role: "system", content: "You are a friendly and helpful AI assistant in a VR Pong game environment. While you can provide tips and guidance about the game, you're also capable of having general conversations on a wide range of topics. Be engaging, informative, and personable." }
+                ];
+            }
+            
+            console.log(`Processing audio with OpenAI API for ${socket.id}`);
+            
+            // Step 1: Transcribe the audio using the file path
+            const transcriptionResponse = await openaiClient.audio.transcriptions.create({
+                file: fs.createReadStream(tempFilePath),
+                model: "whisper-1",
+            });
+            
+            const transcription = transcriptionResponse.text;
+            console.log(`Transcription for ${socket.id}: ${transcription}`);
+            
+            // Clean up the temporary file
+            try {
+                fs.unlinkSync(tempFilePath);
+                console.log(`Deleted temporary file ${tempFilePath}`);
+            } catch (cleanupError) {
+                console.error(`Error deleting temporary file ${tempFilePath}:`, cleanupError);
+            }
+            
+            // If the transcription is empty, send an error
+            if (!transcription || transcription.trim() === '') {
+                socket.emit('openai-error', { error: 'Could not transcribe audio. Please try again.' });
+                return;
+            }
+            
+            // Add user message to history
+            userChatHistories[socket.id].push({ role: "user", content: transcription });
+            
+            // Limit history to last 10 messages to prevent context overflow
+            if (userChatHistories[socket.id].length > 11) { // 1 system + 10 messages
+                userChatHistories[socket.id] = [
+                    userChatHistories[socket.id][0], // Keep system message
+                    ...userChatHistories[socket.id].slice(-10) // Keep last 10 messages
+                ];
+            }
+            
+            // Step 2: Generate a response using the conversation history
+            const completion = await openaiClient.chat.completions.create({
+                messages: userChatHistories[socket.id],
+                model: "gpt-4o-mini",
+            });
+            
+            const response = completion.choices[0].message.content;
+            
+            // Add assistant response to history
+            userChatHistories[socket.id].push({ role: "assistant", content: response });
+            
+            console.log(`Generated text response for ${socket.id}: ${response.substring(0, 50)}...`);
+            
+            // Step 3: Convert the text response to speech using OpenAI's TTS
+            const audioResponse = await openaiClient.audio.speech.create({
+                model: "tts-1",
+                voice: "alloy",
+                input: response,
+            });
+            
+            // Get audio as binary data and convert to base64
+            const speechBuffer = Buffer.from(await audioResponse.arrayBuffer());
+            const audioBase64 = `data:audio/mp3;base64,${speechBuffer.toString('base64')}`;
+            
+            // Send both the text and audio response to the client
+            socket.emit('openai-realtime-response', { 
+                text: response,
+                audio: audioBase64,
+                transcription: transcription
+            });
+            
+        } catch (error) {
+            console.error(`OpenAI API error for ${socket.id}:`, error);
+            
+            let errorMessage = "An error occurred while processing your audio request.";
+            if (error.message) {
+                errorMessage = error.message;
+                
+                // Check for common API key issues
+                if (error.message.includes("API key")) {
+                    errorMessage = "Invalid API key. Please provide a valid OpenAI API key.";
+                } else if (error.message.includes("rate limit")) {
+                    errorMessage = "Rate limit exceeded. Please try again in a moment.";
+                }
+            }
+            
+            socket.emit('openai-error', { error: errorMessage });
+        }
+    });
 });
 
 // Generate a random room ID
 function generateRoomId() {
     return Math.random().toString(36).substring(2, 8).toUpperCase();
+}
+
+// Helper function to convert base64 audio to a buffer
+function base64ToBuffer(base64) {
+    return Buffer.from(base64.split(',')[1], 'base64');
 }
