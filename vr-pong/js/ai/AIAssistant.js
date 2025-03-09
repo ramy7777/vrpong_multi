@@ -14,6 +14,10 @@ export class AIAssistant {
         this.realtimeMode = false; // WebRTC mode
         this.microphonePermissionGranted = false; // Microphone permission status
         
+        // Score tracking
+        this.playerScore = 0;
+        this.aiScore = 0;
+        
         // WebRTC related properties
         this.webrtcPeerConnection = null;
         this.webrtcDataChannel = null;
@@ -31,6 +35,7 @@ export class AIAssistant {
         this._isConnectingWebRTC = false;
         this._isRequestingToken = false;
         this._isClosingWebRTC = false;
+        this._isTogglingRealtimeMode = false;
         
         // Default realtime model
         this.realtimeModel = "gpt-4o-realtime-preview-2024-12-17";
@@ -906,6 +911,20 @@ export class AIAssistant {
         // Show status
         this.showRecognitionStatus("Listening...");
         
+        // For WebRTC mode, check if we should inject score context on this listen event
+        if (this.realtimeMode && (this.playerScore > 0 || this.aiScore > 0)) {
+            // If the score has changed recently or it's been a while since we mentioned it,
+            // we should be ready to inject score context
+            if (this._scoreJustChanged || this._shouldInjectScoreContext()) {
+                console.log("[AI Assistant] Ready to inject score context on next user utterance");
+                // Reset the score change flag
+                this._scoreJustChanged = false;
+            }
+            
+            // Add a system message with current score before listening (for our local UI only)
+            this.addMessageToConversation('system', `Reminder: The current game score is Player ${this.playerScore} - AI ${this.aiScore}.`);
+        }
+        
         // Start appropriate audio recording method based on mode
         if (this.realtimeMode) {
             this.startAudioRecording();
@@ -1316,66 +1335,73 @@ export class AIAssistant {
     
     // Add a toggle method to switch between realtime and traditional modes
     toggleRealtimeMode() {
-        // If we're already in the mode requested, do nothing
-        if (this.realtimeMode === true) {
-            console.log("[AI Assistant] Already in realtime mode, not toggling");
+        if (this._isTogglingRealtimeMode) {
+            console.log("[AI Assistant] Already toggling realtime mode, ignoring duplicate request");
             return;
         }
         
-        // Check for socket connection before enabling realtime mode
-        if (!this.socket || !this.socket.connected) {
-            // Try to get socket from multiplayer manager
-            if (this.game && this.game.multiplayerManager && this.game.multiplayerManager.socket) {
-                this.socket = this.game.multiplayerManager.socket;
-                console.log("[AI Assistant] Got socket from multiplayer manager in toggle");
-            }
-            
-            // If still no socket connection, show error and return
-            if (!this.socket || !this.socket.connected) {
-                console.error("[AI Assistant] Cannot enable realtime mode: No socket connection");
-                this.showMessage("Cannot enable voice chat: Not connected to server");
-                return;
-            }
-        }
+        this._isTogglingRealtimeMode = true;
         
         // Toggle the mode
         this.realtimeMode = !this.realtimeMode;
-        console.log(`[AI Assistant] Realtime mode ${this.realtimeMode ? 'enabled' : 'disabled'}`);
+        console.log("[AI Assistant] Toggling realtime mode to:", this.realtimeMode);
         
-        // If switching to realtime mode, set up WebRTC
+        // Update the UI to reflect the current mode
+        this.updateUIForRealtimeMode();
+        
+        // Check or create the socket connection for WebRTC
         if (this.realtimeMode) {
-            // Request microphone permission first
-            this.requestMicrophonePermission().then(granted => {
-                if (granted) {
-                    console.log("[AI Assistant] Microphone permission granted, initializing WebRTC");
-                    this.initWebRTCConnection();
-                    
-                    // Notify server of realtime mode change
-                    if (this.socket && this.socket.connected) {
-                        this.socket.emit('toggle-realtime-mode', true, (response) => {
-                            console.log(`[AI Assistant] Server acknowledged realtime mode toggle: ${response}`);
-                        });
-                    }
-                } else {
-                    console.log("[AI Assistant] Cannot initialize WebRTC: microphone permission not granted or socket not connected");
+            // Add current score context when switching to real-time mode
+            if (this.playerScore > 0 || this.aiScore > 0) {
+                this.addMessageToConversation('system', `Current game score information: Player ${this.playerScore} - AI ${this.aiScore}.`);
+            }
+            
+            if (!this.socket || !this.socket.connected) {
+                this.connectToServer().then(() => {
+                    console.log("[AI Assistant] Connected to server for WebRTC");
+                    // Request microphone permission if not already granted
+                    this.requestMicrophonePermission().then(() => {
+                        // Initialize WebRTC connection after a short delay
+                        // This ensures the socket is fully connected first
+                        setTimeout(() => {
+                            this.initWebRTCConnection();
+                            this._isTogglingRealtimeMode = false;
+                        }, 500);
+                    }).catch(error => {
+                        console.error("[AI Assistant] Microphone permission error:", error);
+                        this.showMessage("Microphone access is required for real-time voice mode");
+                        this.realtimeMode = false;
+                        this.updateUIForRealtimeMode();
+                        this._isTogglingRealtimeMode = false;
+                    });
+                }).catch(error => {
+                    console.error("[AI Assistant] Error connecting to server:", error);
+                    this.showMessage("Cannot connect to server for WebRTC. Check your connection.");
                     this.realtimeMode = false;
                     this.updateUIForRealtimeMode();
-                }
-            });
-        } else {
-            // If disabling realtime mode, close any WebRTC connections
-            this.closeWebRTCConnection();
-            
-            // Notify server of realtime mode change
-            if (this.socket && this.socket.connected) {
-                this.socket.emit('toggle-realtime-mode', false, (response) => {
-                    console.log(`[AI Assistant] Server acknowledged realtime mode toggle: ${response}`);
+                    this._isTogglingRealtimeMode = false;
+                });
+            } else {
+                // Already have a socket connection, proceed with WebRTC
+                this.requestMicrophonePermission().then(() => {
+                    // Initialize WebRTC connection after a short delay
+                    setTimeout(() => {
+                        this.initWebRTCConnection();
+                        this._isTogglingRealtimeMode = false;
+                    }, 500);
+                }).catch(error => {
+                    console.error("[AI Assistant] Microphone permission error:", error);
+                    this.showMessage("Microphone access is required for real-time voice mode");
+                    this.realtimeMode = false;
+                    this.updateUIForRealtimeMode();
+                    this._isTogglingRealtimeMode = false;
                 });
             }
+        } else {
+            // Turn off WebRTC mode
+            this.closeWebRTCConnection();
+            this._isTogglingRealtimeMode = false;
         }
-        
-        // Update UI to reflect current mode
-        this.updateUIForRealtimeMode();
     }
     
     // Update UI elements to reflect the current realtime mode status
@@ -1493,7 +1519,19 @@ export class AIAssistant {
                     }
                     
                     this._isRequestingToken = true;
-                    this.socket.emit('create-realtime-session', {});
+                    
+                    // Include score information in the system prompt if we have a score
+                    let systemPrompt = "You are a helpful AI assistant integrated into a VR Pong game. ";
+                    
+                    if (this.playerScore > 0 || this.aiScore > 0) {
+                        systemPrompt += `The current score is Player ${this.playerScore} - AI ${this.aiScore}. `;
+                    }
+                    
+                    systemPrompt += "You can analyze gameplay, provide tips, and discuss game strategies. You can also chat about other topics as needed. Always be friendly, concise, and helpful.";
+                    
+                    this.socket.emit('create-realtime-session', {
+                        systemPrompt: systemPrompt
+                    });
                     
                     // Set a timeout to reset the requesting flag if we don't receive a response
                     setTimeout(() => {
@@ -1634,6 +1672,13 @@ export class AIAssistant {
             // Data channel event handlers
             dataChannel.onopen = () => {
                 console.log("[AI Assistant] Data channel opened");
+                
+                // Don't send score context immediately - this was causing disconnections
+                // Instead, just log that we're ready to receive messages
+                if (this.playerScore > 0 || this.aiScore > 0) {
+                    console.log("[AI Assistant] Data channel open, score is currently Player " + 
+                                this.playerScore + " - AI " + this.aiScore);
+                }
             };
             
             dataChannel.onclose = () => {
@@ -1655,11 +1700,62 @@ export class AIAssistant {
                         // User's speech was transcribed
                         console.log("[AI Assistant] User said:", message.transcript);
                         
-                        // Update the user message in the chat
+                        let userTranscript = message.transcript;
+                        let modifiedTranscript = userTranscript;
+                        
+                        // Only if we have a non-empty transcript
+                        if (userTranscript && userTranscript.trim().length > 0) {
+                            const transcript = userTranscript.toLowerCase();
+                            const isScoreQuestion = transcript.includes('score') || 
+                                transcript.includes('what is the score') || 
+                                transcript.includes('what\'s the score') || 
+                                transcript.includes('current score') ||
+                                transcript.includes('game score') ||
+                                transcript.includes('points') ||
+                                transcript.includes('winning') ||
+                                transcript.includes('who is winning');
+                                
+                            // If this is a score-related question OR we haven't mentioned the score in a while,
+                            // prepend score information to the user's query
+                            if ((this.playerScore > 0 || this.aiScore > 0) && 
+                                (isScoreQuestion || this._shouldInjectScoreContext())) {
+                                
+                                // Create a modified transcript that includes the score
+                                // This strategy keeps the WebRTC connection intact while providing score context
+                                modifiedTranscript = `The current score is Player ${this.playerScore}, AI ${this.aiScore}. ${userTranscript}`;
+                                console.log("[AI Assistant] Injecting score context into query:", modifiedTranscript);
+                                
+                                // Reset our score context injection counter
+                                this._lastScoreContextTime = Date.now();
+                                
+                                // Also update the local display with score info
+                                this.addMessageToConversation('system', `Current score: Player ${this.playerScore} - AI ${this.aiScore}`);
+                            }
+                            
+                            // Send the modified transcript to the API via the WebRTC signaling channel
+                            if (this.webrtcSignaling && this.webrtcSignaling.readyState === WebSocket.OPEN && 
+                                modifiedTranscript !== userTranscript) {
+                                try {
+                                    // Use the WebRTC signaling channel to send the updated transcript instead of the data channel
+                                    // This approach maintains the WebRTC connection while updating the transcript
+                                    // NOTE: This is an advanced technique that may not work with all WebRTC implementations
+                                    const signalMessage = {
+                                        type: "input_transcription",
+                                        transcript: modifiedTranscript
+                                    };
+                                    this.webrtcSignaling.send(JSON.stringify(signalMessage));
+                                    console.log("[AI Assistant] Updated transcript sent through signaling channel");
+                                } catch (signalError) {
+                                    console.error("[AI Assistant] Error sending modified transcript:", signalError);
+                                }
+                            }
+                        }
+                        
+                        // Update the user message in the chat with the original transcript
                         if (this.chatHistory.some(msg => msg.role === 'user' && msg.content === '...')) {
-                            this.updateLastUserMessage(message.transcript);
+                            this.updateLastUserMessage(userTranscript);
                         } else {
-                            this.addMessageToConversation('user', message.transcript);
+                            this.addMessageToConversation('user', userTranscript);
                         }
                         
                     } else if (message.type === 'response.audio_transcript.done') {
@@ -2351,6 +2447,11 @@ export class AIAssistant {
         if (this.textInput) {
             this.textInput.value = '';
         }
+        
+        // Add current score context to the request if we're in a game
+        if (this.game && (this.playerScore > 0 || this.aiScore > 0)) {
+            payload.systemMessage = `The current Pong game score is Player ${this.playerScore} - AI ${this.aiScore}.`;
+        }
     }
     
     // Toggle listening state for voice input
@@ -2541,12 +2642,30 @@ export class AIAssistant {
     
     // Handle score updates from the game
     handleScoreUpdate(playerScore, aiScore, scoringPlayer) {
+        // Store the current scores in class properties for access by other methods
+        this.playerScore = playerScore;
+        this.aiScore = aiScore;
+        
+        // Track that the score just changed
+        this._scoreJustChanged = true;
+        this._lastScoreChangeTime = Date.now();
+        
         // Only proceed if we have a chat UI to display messages
         if (!this.container) return;
         
         // Always update score in the chat
         const scoreMessage = `Score Update: You ${playerScore} - ${aiScore} AI`;
         this.showScoreUpdate(scoreMessage);
+        
+        // Add the score as a system message to the conversation history
+        // This ensures the AI model has context about the current score
+        this.addMessageToConversation('system', `Current score: Player ${playerScore} - AI ${aiScore}. ${scoringPlayer === 'player' ? 'The player' : 'The AI'} just scored.`);
+        
+        // Don't send score update directly to WebRTC - this causes disconnections
+        // Just log that the score has been updated
+        if (this.realtimeMode) {
+            console.log(`[AI Assistant] Score updated in real-time mode: Player ${playerScore} - AI ${aiScore}`);
+        }
         
         // Occasionally add commentary based on the score differential
         const scoreDiff = playerScore - aiScore;
@@ -2642,5 +2761,36 @@ export class AIAssistant {
             // Scroll to bottom
             this.chatDisplay.scrollTop = this.chatDisplay.scrollHeight;
         }
+    }
+
+    // Add a new method to send score context through WebRTC
+    sendScoreContextToWebRTC() {
+        // Only proceed if we have an active WebRTC connection and scores
+        if (!this.webrtcConnected || !this.webrtcDataChannel || this.webrtcDataChannel.readyState !== 'open') {
+            return;
+        }
+
+        try {
+            // Instead of sending custom messages, we'll record the score as a system message in our local context
+            // This ensures we maintain it in our conversation history
+            console.log("[AI Assistant] Updating score context in conversation history");
+            
+            // We're NOT sending any messages through the data channel as it causes errors
+            // The score will be sent with the next user voice query instead
+        } catch (error) {
+            console.error("[AI Assistant] Error handling score context:", error);
+        }
+    }
+
+    // Add a helper method to determine if we should inject score context
+    _shouldInjectScoreContext() {
+        // If we haven't tracked when we last injected score context, initialize it
+        if (!this._lastScoreContextTime) {
+            this._lastScoreContextTime = 0;
+        }
+        
+        // Inject score context if we haven't done so in the last 2 minutes
+        const twoMinutes = 2 * 60 * 1000; // 2 minutes in milliseconds
+        return (Date.now() - this._lastScoreContextTime > twoMinutes);
     }
 } 
