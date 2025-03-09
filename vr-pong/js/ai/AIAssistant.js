@@ -207,14 +207,10 @@ export class AIAssistant {
                     this.createChatUI();
                     this.showChatUI();
                     
-                    // Add a welcome message
+                    // Add a welcome message to the UI but don't speak it
                     this.addMessageToConversation('assistant', 'Hello! I\'m your AI assistant. I can help with your Pong game or we can chat about anything you\'d like to discuss.');
                     
-                    // If in realtime mode, we don't speak the welcome message here
-                    // as we'll wait for the user to interact first
-                    if (!this.isRealtimeMode) {
-                        this.speakText('Hello! I\'m your AI assistant. I can help with your Pong game or we can chat about anything you\'d like to discuss.');
-                    }
+                    // Removed automatic speech of welcome message
                 }, 1000);
             } else {
                 console.error("API key error:", data.error);
@@ -2327,16 +2323,10 @@ export class AIAssistant {
         }
     }
     
-    // Text-to-speech for assistant responses
+    // Voice synthesis with improved handling
     speakText(text) {
-        if (!text || text.trim() === '') {
-            console.log("[AI Assistant] Empty text provided to speakText, ignoring");
-            return;
-        }
-
-        // Don't start a new speech if one is already in progress
-        if (this.isSpeaking) {
-            console.log("[AI Assistant] Speech already in progress, ignoring new request");
+        if (!text || !window.speechSynthesis) {
+            console.log("[AI Assistant] Speech synthesis not available or no text provided");
             return;
         }
 
@@ -2353,36 +2343,111 @@ export class AIAssistant {
             const voices = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
             console.log(`[AI Assistant] Available voices: ${voices.length}`);
 
-            if (window.speechSynthesis && voices.length === 0) {
-                // If voices are not available yet, wait for them to load
-                console.log("[AI Assistant] No voices available, waiting for voices to load");
-                window.speechSynthesis.onvoiceschanged = () => {
+            // If we already have voices, use them
+            if (voices.length > 0) {
+                this.speakTextWithVoices(text, voices);
+                return;
+            }
+
+            // If voices are not available yet, wait for them to load (but only with a single approach)
+            let voicesLoaded = false;
+            
+            console.log("[AI Assistant] No voices available, waiting for voices to load");
+            window.speechSynthesis.onvoiceschanged = () => {
+                // Only proceed if we haven't already started speaking
+                if (!voicesLoaded) {
+                    voicesLoaded = true;
                     const loadedVoices = window.speechSynthesis.getVoices();
                     console.log(`[AI Assistant] Voices loaded, now available: ${loadedVoices.length}`);
-                    
-                    if (loadedVoices.length > 0) {
-                        window.speechSynthesis.onvoiceschanged = null; // Remove the event handler
-                        this.speakTextWithVoices(text, loadedVoices);
-                    }
-                };
+                    window.speechSynthesis.onvoiceschanged = null; // Remove the event handler
+                    this.speakTextWithVoices(text, loadedVoices);
+                }
+            };
 
-                // Add a fallback timeout in case the voices never load
-                setTimeout(() => {
-                    if (this.isSpeaking && (!voices || voices.length === 0)) {
-                        console.warn("[AI Assistant] Voices never loaded, using default voice");
-                        // Just try to speak with default voice
-                        this.speakTextWithVoices(text, []);
-                    }
-                }, 3000);
-            } else {
-                this.speakTextWithVoices(text, voices);
-            }
+            // Set a single timeout as fallback
+            setTimeout(() => {
+                if (!voicesLoaded) {
+                    console.warn("[AI Assistant] Voices didn't load in time, trying default voice");
+                    voicesLoaded = true;
+                    window.speechSynthesis.onvoiceschanged = null; // Clear the handler
+                    this.speakTextWithVoices(text, []); // Try with empty voices array
+                }
+            }, 2000);
         } catch (error) {
             console.error('[AI Assistant] Error with speech synthesis:', error);
             this.isSpeaking = false;
-            
             // Show message to user
             this.showMessage("Speech synthesis failed. Please try again.");
+        }
+    }
+
+    // Helper to speak text with the provided voices - prioritize Google voices
+    speakTextWithVoices(text, voices) {
+        if (!text) return;
+        
+        try {
+            // Create utterance
+            const utterance = new SpeechSynthesisUtterance(text);
+            
+            // Set voice if available, with strong preference for Google voices
+            if (voices && voices.length > 0) {
+                // First priority: Google US English
+                let selectedVoice = voices.find(voice => 
+                    voice.name.includes('Google') && voice.name.includes('US English')
+                );
+                
+                // Second priority: Any Google English voice
+                if (!selectedVoice) {
+                    selectedVoice = voices.find(voice => 
+                        voice.name.includes('Google') && voice.lang.includes('en')
+                    );
+                }
+                
+                // Third priority: Any English voice
+                if (!selectedVoice) {
+                    selectedVoice = voices.find(voice => voice.lang.includes('en'));
+                }
+                
+                // Last resort: any voice
+                if (!selectedVoice && voices.length > 0) {
+                    selectedVoice = voices[0];
+                }
+                
+                if (selectedVoice) {
+                    console.log(`[AI Assistant] Using voice: ${selectedVoice.name}`);
+                    utterance.voice = selectedVoice;
+                    // Store the selected voice for future use
+                    this.selectedVoice = selectedVoice;
+                }
+            } else if (this.selectedVoice) {
+                // Use previously selected voice if available
+                utterance.voice = this.selectedVoice;
+                console.log(`[AI Assistant] Reusing previously selected voice: ${this.selectedVoice.name}`);
+            }
+            
+            // Set other properties
+            utterance.rate = 1.0;  // Normal speed
+            utterance.pitch = 1.0; // Normal pitch
+            utterance.volume = 1.0; // Full volume
+            
+            // Handle events
+            utterance.onend = () => {
+                console.log("[AI Assistant] Speech synthesis completed");
+                this.isSpeaking = false;
+            };
+            
+            utterance.onerror = (event) => {
+                console.error("[AI Assistant] Speech synthesis error:", event);
+                this.isSpeaking = false;
+            };
+            
+            // Speak the text
+            if (window.speechSynthesis) {
+                window.speechSynthesis.speak(utterance);
+            }
+        } catch (error) {
+            console.error("[AI Assistant] Error in speech synthesis:", error);
+            this.isSpeaking = false;
         }
     }
     
@@ -2430,63 +2495,6 @@ export class AIAssistant {
             if (typeof this.speakText === 'function') {
                 this.speakText(response);
             }
-        }
-    }
-    
-    // Helper to speak text with the provided voices
-    speakTextWithVoices(text, voices) {
-        if (!text) return;
-        
-        try {
-            // Create utterance
-            const utterance = new SpeechSynthesisUtterance(text);
-            
-            // Set voice if available
-            if (voices && voices.length > 0) {
-                // Try to find a good voice
-                let selectedVoice = voices.find(voice => 
-                    voice.name.includes('Google') && voice.lang.includes('en')
-                );
-                
-                // Fallback to any English voice
-                if (!selectedVoice) {
-                    selectedVoice = voices.find(voice => voice.lang.includes('en'));
-                }
-                
-                // Use any voice as last resort
-                if (!selectedVoice && voices.length > 0) {
-                    selectedVoice = voices[0];
-                }
-                
-                if (selectedVoice) {
-                    console.log(`[AI Assistant] Using voice: ${selectedVoice.name}`);
-                    utterance.voice = selectedVoice;
-                }
-            }
-            
-            // Set other properties
-            utterance.rate = 1.0;  // Normal speed
-            utterance.pitch = 1.0; // Normal pitch
-            utterance.volume = 1.0; // Full volume
-            
-            // Handle events
-            utterance.onend = () => {
-                console.log("[AI Assistant] Speech synthesis completed");
-                this.isSpeaking = false;
-            };
-            
-            utterance.onerror = (event) => {
-                console.error("[AI Assistant] Speech synthesis error:", event);
-                this.isSpeaking = false;
-            };
-            
-            // Speak the text
-            if (window.speechSynthesis) {
-                window.speechSynthesis.speak(utterance);
-            }
-        } catch (error) {
-            console.error("[AI Assistant] Error in speech synthesis:", error);
-            this.isSpeaking = false;
         }
     }
 } 
