@@ -7,67 +7,54 @@ export class AIAssistant {
         this.useServerSide = false; // Whether to use server-side API or client-side
         
         // State variables
-        this.isInitialized = false;
-        this.isListening = false;
+        this.initialized = false;
         this.isSpeaking = false;
+        this.isListening = false;
         this.isRecording = false;
         this.realtimeMode = false; // WebRTC mode
         this.microphonePermissionGranted = false; // Microphone permission status
         
         // WebRTC related properties
+        this.webrtcPeerConnection = null;
+        this.webrtcDataChannel = null;
+        this.webrtcSignaling = null;
+        this.webrtcConnected = false;
         this.webrtcSessionId = null;
         this.webrtcToken = null;
         this.webrtcIceServers = null;
-        this.peerConnection = null;
         this.webrtcAudioElement = null;
-        this.microphoneStream = null;
-        this.audioProcessor = null;
-        this.audioSource = null;
+        this.audioStream = null;
         this.audioContext = null;
+        this.iceGatheringComplete = false;
         
-        // UI elements
-        this.container = null;
-        this.chatDisplay = null;
-        this.textInput = null;
-        this.microphoneButton = null;
-        this.statusDisplay = null;
-        this.setupContainer = null;
-        this.apiKeyField = null;
+        // State tracking flags to prevent duplicate operations
+        this._isConnectingWebRTC = false;
+        this._isRequestingToken = false;
+        this._isClosingWebRTC = false;
         
-        // Audio variables
-        this.recognition = null;
-        this.audioRecorder = null;
-        this.recordedChunks = [];
-        this.audioPlayer = new Audio();
+        // Default realtime model
+        this.realtimeModel = "gpt-4o-realtime-preview-2024-12-17";
         
-        // Data
-        this.apiKey = null;
-        this.chatHistory = [];
-        this.socket = null;
-        
-        // For direct OpenAI integration
-        this.openai = null;
-        
-        // Check if we have a socket connection from multiplayer manager
-        if (game && game.multiplayerManager && game.multiplayerManager.socket) {
-            this.socket = game.multiplayerManager.socket;
-            this.useServerSide = true;
-            this.isInitialized = true; // Mark as initialized when using server-side
-            console.log("AI Assistant: Using server-side AI processing via socket.io, marked as initialized");
-            
-            this.setupSocketListeners();
+        // Get socket from multiplayer manager if available
+        if (this.game && this.game.multiplayerManager && this.game.multiplayerManager.socket) {
+            this.socket = this.game.multiplayerManager.socket;
+            console.log("AI Assistant: Using socket from multiplayer manager");
         } else {
-            console.warn("AI Assistant: No socket provided, AI assistant will be limited");
+            console.error("AI Assistant: No multiplayer manager socket available");
+            this.socket = null;
         }
         
-        // Create UI
+        // Connect to server for AI processing
+        this.connectToServer();
+        
+        // Create UI elements
         this.createUI();
         
-        // Initialize audio context
-        this.initAudioContext();
+        // Set up connection status monitoring 
+        this.setupSocketListeners();
         
-        // Check browser compatibility for speech features
-        this.checkSpeechCompatibility();
+        // Mark as initialized
+        this.initialized = true;
         
         console.log("AI Assistant: Basic properties initialized");
     }
@@ -281,13 +268,29 @@ export class AIAssistant {
         this.socket.on('openai-webrtc-token', (data) => {
             console.log("[AI Assistant] Received WebRTC token from server");
             
-            // Clear any pending timeout
-            if (this.webrtcInitTimeout) {
-                clearTimeout(this.webrtcInitTimeout);
-                this.webrtcInitTimeout = null;
-            }
+            // Reset token requesting flag
+            this._isRequestingToken = false;
             
-            this.setupWebRTCConnection(data);
+            // Check if token is valid
+            if (data && data.sessionId && data.token) {
+                // Only proceed if we're still in realtime mode
+                if (this.realtimeMode) {
+                    this.setupWebRTCConnection(data);
+                } else {
+                    console.log("[AI Assistant] Received WebRTC token but no longer in realtime mode, ignoring");
+                    
+                    // Close the session on the server side
+                    if (this.socket && this.socket.connected) {
+                        this.socket.emit('close-realtime-session', { sessionId: data.sessionId });
+                    }
+                }
+            } else if (data && data.error) {
+                console.error(`[AI Assistant] WebRTC token error: ${data.error}`);
+                this.showMessage(`AI voice error: ${data.error}`);
+                this._isConnectingWebRTC = false;
+                this.realtimeMode = false;
+                this.updateUIForRealtimeMode();
+            }
         });
         
         // Handle WebRTC-specific errors
@@ -1276,41 +1279,62 @@ export class AIAssistant {
     
     // Add a toggle method to switch between realtime and traditional modes
     toggleRealtimeMode() {
-        // Clean up any existing WebRTC connection
-        this.closeWebRTCConnection();
+        // If we're already in the mode requested, do nothing
+        if (this.realtimeMode === true) {
+            console.log("[AI Assistant] Already in realtime mode, not toggling");
+            return;
+        }
         
-        // Toggle realtime mode
+        // Check for socket connection before enabling realtime mode
+        if (!this.socket || !this.socket.connected) {
+            // Try to get socket from multiplayer manager
+            if (this.game && this.game.multiplayerManager && this.game.multiplayerManager.socket) {
+                this.socket = this.game.multiplayerManager.socket;
+                console.log("[AI Assistant] Got socket from multiplayer manager in toggle");
+            }
+            
+            // If still no socket connection, show error and return
+            if (!this.socket || !this.socket.connected) {
+                console.error("[AI Assistant] Cannot enable realtime mode: No socket connection");
+                this.showMessage("Cannot enable voice chat: Not connected to server");
+                return;
+            }
+        }
+        
+        // Toggle the mode
         this.realtimeMode = !this.realtimeMode;
         console.log(`[AI Assistant] Realtime mode ${this.realtimeMode ? 'enabled' : 'disabled'}`);
         
-        // If we're enabling realtime mode, initialize WebRTC
+        // If switching to realtime mode, set up WebRTC
         if (this.realtimeMode) {
-            // Reset WebRTC state variables to ensure a clean slate for new connection
-            this.webrtcSessionId = null;
-            this.webrtcToken = null;
-            
-            // Set timeout for WebRTC initialization
-            this.webrtcInitTimeout = setTimeout(() => {
-                console.log("[AI Assistant] WebRTC initialization timed out, falling back to traditional mode");
-                this.realtimeMode = false;
-                this.updateUIForRealtimeMode();
-            }, 10000);
-            
             // Request microphone permission first
-            this.requestMicrophonePermission().then(hasPermission => {
-                // Store the permission result
-                this.microphonePermissionGranted = hasPermission;
-                
-                // If we have permission and socket is connected, initialize WebRTC
-                if (hasPermission && this.socket && this.socket.connected) {
+            this.requestMicrophonePermission().then(granted => {
+                if (granted) {
                     console.log("[AI Assistant] Microphone permission granted, initializing WebRTC");
                     this.initWebRTCConnection();
+                    
+                    // Notify server of realtime mode change
+                    if (this.socket && this.socket.connected) {
+                        this.socket.emit('toggle-realtime-mode', true, (response) => {
+                            console.log(`[AI Assistant] Server acknowledged realtime mode toggle: ${response}`);
+                        });
+                    }
                 } else {
                     console.log("[AI Assistant] Cannot initialize WebRTC: microphone permission not granted or socket not connected");
                     this.realtimeMode = false;
                     this.updateUIForRealtimeMode();
                 }
             });
+        } else {
+            // If disabling realtime mode, close any WebRTC connections
+            this.closeWebRTCConnection();
+            
+            // Notify server of realtime mode change
+            if (this.socket && this.socket.connected) {
+                this.socket.emit('toggle-realtime-mode', false, (response) => {
+                    console.log(`[AI Assistant] Server acknowledged realtime mode toggle: ${response}`);
+                });
+            }
         }
         
         // Update UI to reflect current mode
@@ -1381,9 +1405,69 @@ export class AIAssistant {
     // Initialize WebRTC peer connection
     async initWebRTCConnection() {
         try {
+            // Check if we're already in the process of connecting
+            if (this._isConnectingWebRTC) {
+                console.log("[AI Assistant] WebRTC connection already in progress, skipping duplicate request");
+                return;
+            }
+            
+            // Check if we already have an active connection
+            if (this.webrtcConnected && this.webrtcPeerConnection?.connectionState === 'connected') {
+                console.log("[AI Assistant] WebRTC already connected, not initializing a new connection");
+                return;
+            }
+            
+            this._isConnectingWebRTC = true;
+            
+            // Close any existing connections before creating a new one
+            this.closeWebRTCConnection();
+            
+            // Check if we have a socket connection, try to get one if not
+            if (!this.socket || !this.socket.connected) {
+                // Try to get socket from multiplayer manager
+                if (this.game && this.game.multiplayerManager && this.game.multiplayerManager.socket) {
+                    this.socket = this.game.multiplayerManager.socket;
+                    console.log("[AI Assistant] Got socket from multiplayer manager in WebRTC init");
+                }
+                
+                // If we still don't have a connected socket, try to reconnect
+                if (!this.socket || !this.socket.connected) {
+                    try {
+                        await this.connectToServer();
+                        console.log("[AI Assistant] Successfully reconnected to server");
+                    } catch (error) {
+                        console.error("[AI Assistant] Failed to connect to server:", error);
+                        this._isConnectingWebRTC = false;
+                        this.realtimeMode = false;
+                        this.updateUIForRealtimeMode();
+                        this.showMessage("Cannot connect to server. Check your connection.");
+                        return;
+                    }
+                }
+            }
+            
             if (!this.webrtcToken || !this.webrtcSessionId) {
                 console.log("[AI Assistant] Requesting new WebRTC token from server");
-                this.socket.emit('create-realtime-session', {});
+                if (this.socket && this.socket.connected) {
+                    // Use a flag to prevent multiple concurrent token requests
+                    if (this._isRequestingToken) {
+                        console.log("[AI Assistant] Token request already in progress, skipping duplicate request");
+                        return;
+                    }
+                    
+                    this._isRequestingToken = true;
+                    this.socket.emit('create-realtime-session', {});
+                    
+                    // Set a timeout to reset the requesting flag if we don't receive a response
+                    setTimeout(() => {
+                        this._isRequestingToken = false;
+                    }, 5000);
+                } else {
+                    console.error("[AI Assistant] Cannot request WebRTC token: socket not connected");
+                    this.realtimeMode = false;
+                    this.updateUIForRealtimeMode();
+                    this._isConnectingWebRTC = false;
+                }
                 return; // Wait for the token event to call this method again
             }
             
@@ -1715,6 +1799,8 @@ export class AIAssistant {
         } catch (error) {
             console.error("[AI Assistant] Error setting up WebRTC for Realtime API:", error);
             this.showMessage("Failed to connect to AI voice: " + error.message);
+            this._isConnectingWebRTC = false;
+            this._isRequestingToken = false;
             this.closeWebRTCConnection();
         }
     }
@@ -1847,6 +1933,21 @@ export class AIAssistant {
     closeWebRTCConnection() {
         console.log("[AI Assistant] Closing WebRTC connection");
         
+        // Prevent multiple simultaneous closure attempts
+        if (this._isClosingWebRTC) {
+            console.log("[AI Assistant] WebRTC closure already in progress, skipping duplicate request");
+            return;
+        }
+        
+        this._isClosingWebRTC = true;
+        
+        // Notify server about session closure if we have a session ID
+        if (this.webrtcSessionId && this.socket && this.socket.connected) {
+            this.socket.emit('close-realtime-session', { sessionId: this.webrtcSessionId }, (response) => {
+                console.log(`[AI Assistant] Server acknowledged session closure: ${response?.success ? 'success' : 'failed'}`);
+            });
+        }
+        
         // Close WebSocket signaling channel
         if (this.webrtcSignaling) {
             try {
@@ -1856,6 +1957,17 @@ export class AIAssistant {
                 console.error("[AI Assistant] Error closing WebRTC signaling:", error);
             }
             this.webrtcSignaling = null;
+        }
+        
+        // Close data channel if it exists
+        if (this.webrtcDataChannel) {
+            try {
+                this.webrtcDataChannel.close();
+                console.log("[AI Assistant] WebRTC data channel closed");
+            } catch (error) {
+                console.error("[AI Assistant] Error closing WebRTC data channel:", error);
+            }
+            this.webrtcDataChannel = null;
         }
         
         // Close peer connection
@@ -1898,16 +2010,14 @@ export class AIAssistant {
             this.webrtcAudioElement = null;
         }
         
-        // Stop any ongoing audio recording
-        if (this.isRecording) {
-            this.stopAudioRecording();
-        }
-        
         // Reset WebRTC state variables
         this.webrtcConnected = false;
         this.iceGatheringComplete = false;
-        // Don't clear session ID and token here, as they are needed for session cleanup
-        // They'll be reset when toggling back to realtime mode
+        this._isConnectingWebRTC = false;
+        this._isRequestingToken = false;
+        this._isClosingWebRTC = false;
+        
+        console.log("[AI Assistant] WebRTC connection fully closed");
     }
     
     // Apply styles to UI elements
@@ -2141,6 +2251,12 @@ export class AIAssistant {
                 return;
             }
             
+            // Try to get socket from multiplayer manager if not already available
+            if (!this.socket && this.game && this.game.multiplayerManager && this.game.multiplayerManager.socket) {
+                this.socket = this.game.multiplayerManager.socket;
+                console.log("AI Assistant: Got socket from multiplayer manager during connect");
+            }
+            
             if (!this.socket) {
                 console.error("AI Assistant: No socket available");
                 reject(new Error("Not connected to server"));
@@ -2157,7 +2273,7 @@ export class AIAssistant {
                     resolve();
                 });
                 
-                // Handle connection error
+                // Handle connection errors
                 this.socket.once('connect_error', (error) => {
                     console.error("AI Assistant: Connection error:", error);
                     reject(error);
