@@ -12,6 +12,7 @@ export class AIAssistant {
         this.isSpeaking = false;
         this.isRecording = false;
         this.realtimeMode = false; // WebRTC mode
+        this.microphonePermissionGranted = false; // Microphone permission status
         
         // WebRTC related properties
         this.webrtcSessionId = null;
@@ -407,6 +408,16 @@ export class AIAssistant {
         if (this.useServerSide) {
             console.log("AI Assistant: Using server-side API, skipping client initialization");
             this.isInitialized = true;
+            
+            // Request microphone permission early to improve UX
+            try {
+                const hasPermission = await this.requestMicrophonePermission();
+                this.microphonePermissionGranted = hasPermission;
+                console.log(`AI Assistant: Microphone permission ${hasPermission ? 'granted' : 'denied'} during initialization`);
+            } catch (error) {
+                console.error("AI Assistant: Error requesting microphone permission:", error);
+            }
+            
             return;
         }
         
@@ -419,6 +430,15 @@ export class AIAssistant {
             // Store the API key
             this.apiKey = apiKey;
             console.log("AI Assistant: Initialized with API key");
+            
+            // Request microphone permission early to improve UX
+            try {
+                const hasPermission = await this.requestMicrophonePermission();
+                this.microphonePermissionGranted = hasPermission;
+                console.log(`AI Assistant: Microphone permission ${hasPermission ? 'granted' : 'denied'} during initialization`);
+            } catch (error) {
+                console.error("AI Assistant: Error requesting microphone permission:", error);
+            }
             
             // Initialize speech recognition
             this.initSpeechRecognition();
@@ -1256,84 +1276,50 @@ export class AIAssistant {
     
     // Add a toggle method to switch between realtime and traditional modes
     toggleRealtimeMode() {
-        if (this.isListening) {
-            this.stopListening();
-        }
+        // Clean up any existing WebRTC connection
+        this.closeWebRTCConnection();
         
-        if (this.isRecording) {
-            this.stopAudioRecording();
-        }
-        
-        // Toggle the mode
+        // Toggle realtime mode
         this.realtimeMode = !this.realtimeMode;
-        console.log(`[AI Assistant] ${this.realtimeMode ? 'Enabling' : 'Disabling'} realtime audio mode`);
+        console.log(`[AI Assistant] Realtime mode ${this.realtimeMode ? 'enabled' : 'disabled'}`);
         
+        // If we're enabling realtime mode, initialize WebRTC
         if (this.realtimeMode) {
-            // Make sure we have microphone permission
+            // Reset WebRTC state variables to ensure a clean slate for new connection
+            this.webrtcSessionId = null;
+            this.webrtcToken = null;
+            
+            // Set timeout for WebRTC initialization
+            this.webrtcInitTimeout = setTimeout(() => {
+                console.log("[AI Assistant] WebRTC initialization timed out, falling back to traditional mode");
+                this.realtimeMode = false;
+                this.updateUIForRealtimeMode();
+            }, 10000);
+            
+            // Request microphone permission first
             this.requestMicrophonePermission().then(hasPermission => {
-                if (hasPermission) {
-                    // Show a message to the user
-                    this.showMessage("WebRTC mode enabled. Initializing connection...");
-                    
-                    // Update the display
-                    this.updateChatDisplay();
-                    
-                    // Keep track of WebRTC failures - if we get 2 consecutive errors, auto-switch
-                    this.webrtcFailCount = 0;
-                    
-                    // Important: Initialize WebRTC connection after permission is granted
-                    if (this.socket && this.socket.connected) {
-                        console.log("[AI Assistant] Requesting WebRTC token from server");
-                        this.socket.emit('create-realtime-session', {});
-                        
-                        // Set up a timeout to handle if we don't get a response
-                        this.webrtcInitTimeout = setTimeout(() => {
-                            console.error("[AI Assistant] WebRTC initialization timed out");
-                            this.showMessage("WebRTC initialization failed. Try again or use traditional mode.");
-                            this.realtimeMode = false;
-                            
-                            // Update UI to reflect traditional mode
-                            if (this.microphoneButton) {
-                                const modeIcon = this.microphoneButton.querySelector('.mode-icon');
-                                if (modeIcon) {
-                                    modeIcon.textContent = '🎙️';
-                                }
-                                this.microphoneButton.style.backgroundColor = '#2196F3';
-                                this.microphoneButton.title = 'Traditional voice mode - Click to switch to real-time mode (WebRTC)';
-                            }
-                        }, 10000); // 10 second timeout
-                    } else {
-                        console.error("[AI Assistant] Socket not connected, can't initialize WebRTC");
-                        this.showMessage("Error: Not connected to server. Please reload the page.");
-                        this.realtimeMode = false;
-                    }
+                // Store the permission result
+                this.microphonePermissionGranted = hasPermission;
+                
+                // If we have permission and socket is connected, initialize WebRTC
+                if (hasPermission && this.socket && this.socket.connected) {
+                    console.log("[AI Assistant] Microphone permission granted, initializing WebRTC");
+                    this.initWebRTCConnection();
                 } else {
-                    console.error("[AI Assistant] Microphone permission denied");
-                    this.showMessage("Microphone permission required for realtime mode");
+                    console.log("[AI Assistant] Cannot initialize WebRTC: microphone permission not granted or socket not connected");
                     this.realtimeMode = false;
-                    
-                    // Update the UI to show that we've reverted
-                    if (this.microphoneButton) {
-                        const modeIcon = this.microphoneButton.querySelector('.mode-icon');
-                        if (modeIcon) {
-                            modeIcon.textContent = '🎙️';
-                        }
-                    }
+                    this.updateUIForRealtimeMode();
                 }
             });
-        } else {
-            // When switching to traditional mode
-            this.showMessage("Switched to traditional voice mode");
-            this.closeWebRTCConnection();
-            
-            // Clear any pending timeouts
-            if (this.webrtcInitTimeout) {
-                clearTimeout(this.webrtcInitTimeout);
-                this.webrtcInitTimeout = null;
-            }
         }
-
-        // Update UI to show current mode
+        
+        // Update UI to reflect current mode
+        this.updateUIForRealtimeMode();
+    }
+    
+    // Update UI elements to reflect the current realtime mode status
+    updateUIForRealtimeMode() {
+        // Update the microphone button UI based on the current mode
         if (this.microphoneButton) {
             const modeIcon = this.microphoneButton.querySelector('.mode-icon');
             if (modeIcon) {
@@ -1350,7 +1336,7 @@ export class AIAssistant {
             }
         }
         
-        return this.realtimeMode;
+        console.log(`[AI Assistant] UI updated for ${this.realtimeMode ? 'realtime' : 'traditional'} mode`);
     }
     
     // Setup WebRTC for direct audio conversations with OpenAI
@@ -1396,10 +1382,16 @@ export class AIAssistant {
     async initWebRTCConnection() {
         try {
             if (!this.webrtcToken || !this.webrtcSessionId) {
-                throw new Error("Missing WebRTC token or session ID");
+                console.log("[AI Assistant] Requesting new WebRTC token from server");
+                this.socket.emit('create-realtime-session', {});
+                return; // Wait for the token event to call this method again
             }
             
             console.log("[AI Assistant] Initializing WebRTC for Realtime API");
+            
+            // Reset connection state
+            this.webrtcConnected = false;
+            this.iceGatheringComplete = false;
             
             // Create a new peer connection with the ICE servers
             const peerConnection = new RTCPeerConnection({
@@ -1418,7 +1410,19 @@ export class AIAssistant {
                           peerConnection.connectionState === 'disconnected' || 
                           peerConnection.connectionState === 'closed') {
                     this.webrtcConnected = false;
-                    this.showMessage("WebRTC failed. Connection issue.");
+                    this.showMessage("WebRTC connection issue. Retrying...");
+                    
+                    // After a short delay, try to reconnect if we're still in realtime mode
+                    if (this.realtimeMode) {
+                        setTimeout(() => {
+                            if (this.realtimeMode) {
+                                // Reset tokens to force requesting a new session
+                                this.webrtcSessionId = null;
+                                this.webrtcToken = null;
+                                this.initWebRTCConnection();
+                            }
+                        }, 2000);
+                    }
                 }
             };
             
@@ -1571,6 +1575,16 @@ export class AIAssistant {
             try {
                 console.log("[AI Assistant] Connecting to Realtime API WebSocket");
                 
+                // Close any existing WebSocket connection
+                if (this.webrtcSignaling) {
+                    try {
+                        this.webrtcSignaling.close();
+                    } catch (e) {
+                        console.error("[AI Assistant] Error closing existing WebSocket:", e);
+                    }
+                    this.webrtcSignaling = null;
+                }
+                
                 // Make sure we have the client secret token from the server (it's sent as "token")
                 this.ephemeralKey = this.webrtcToken;
                 
@@ -1597,7 +1611,26 @@ export class AIAssistant {
                     }));
                 };
                 
+                // Store the signaling object
                 this.webrtcSignaling = signaling;
+                
+                // Add error handler
+                signaling.onerror = (error) => {
+                    console.error("[AI Assistant] WebSocket signaling error:", error);
+                    this.showMessage("WebRTC signaling error, reconnecting...");
+                    
+                    // Try to reconnect if we're still in realtime mode
+                    if (this.realtimeMode) {
+                        setTimeout(() => {
+                            if (this.realtimeMode) {
+                                // Request a new session
+                                this.webrtcSessionId = null;
+                                this.webrtcToken = null;
+                                this.initWebRTCConnection();
+                            }
+                        }, 3000);
+                    }
+                };
                 
                 // Handle WebSocket events
                 signaling.onmessage = async (event) => {
@@ -1648,20 +1681,6 @@ export class AIAssistant {
                         }
                     } catch (error) {
                         console.error("[AI Assistant] Error handling signaling message:", error);
-                    }
-                };
-                
-                signaling.onerror = (error) => {
-                    console.error("[AI Assistant] WebSocket signaling error:", error);
-                    this.showMessage("WebRTC signaling error");
-                    
-                    // Attempt to close the WebSocket to prevent any hanging connections
-                    try {
-                        if (signaling.readyState !== WebSocket.CLOSED) {
-                            signaling.close();
-                        }
-                    } catch (closeError) {
-                        console.error("[AI Assistant] Error closing WebSocket:", closeError);
                     }
                 };
                 
@@ -1883,6 +1902,12 @@ export class AIAssistant {
         if (this.isRecording) {
             this.stopAudioRecording();
         }
+        
+        // Reset WebRTC state variables
+        this.webrtcConnected = false;
+        this.iceGatheringComplete = false;
+        // Don't clear session ID and token here, as they are needed for session cleanup
+        // They'll be reset when toggling back to realtime mode
     }
     
     // Apply styles to UI elements
