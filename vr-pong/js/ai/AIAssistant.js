@@ -1034,14 +1034,20 @@ export class AIAssistant {
         });
         
         // Try to find a good voice with a prioritized approach
-        // First priority: Google UK English Female or similar high-quality voices
+        // First priority: Google UK English Female or other high-quality natural voices
         let selectedVoice = voices.find(voice => 
-            (voice.name.includes('UK English Female') || 
-             voice.name.includes('Samantha') ||
-             voice.name.includes('Zira'))
+            voice.name.includes('Google UK English Female')
         );
         
-        // Second priority: Any female English voice
+        // Second priority: Other high-quality Google voices
+        if (!selectedVoice) {
+            selectedVoice = voices.find(voice => 
+                voice.name.includes('Google US English') ||
+                voice.name.includes('Google UK English Male')
+            );
+        }
+        
+        // Third priority: Any female English voice
         if (!selectedVoice) {
             selectedVoice = voices.find(voice => 
                 (voice.name.includes('Female') || voice.name.includes('female')) &&
@@ -1049,7 +1055,7 @@ export class AIAssistant {
             );
         }
         
-        // Third priority: Any English voice
+        // Fourth priority: Any English voice
         if (!selectedVoice) {
             selectedVoice = voices.find(voice => 
                 voice.lang.includes('en') || voice.lang.includes('EN')
