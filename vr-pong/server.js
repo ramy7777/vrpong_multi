@@ -33,8 +33,11 @@ if (openaiApiKey) {
 // Game rooms storage
 const gameRooms = {};
 
-// Add this at the top of the file where other variables are declared
-const userChatHistories = {}; // Store chat histories for each user
+// Store chat histories for each user
+const userChatHistories = {};
+
+// Store WebRTC conversation sessions for each user
+const userConversationSessions = {};
 
 const app = express();
 app.use(express.static('./'));
@@ -80,6 +83,91 @@ if (isRender) {
 
 // Initialize Socket.io
 const io = socketIo(server);
+
+// Global error handlers to prevent crashes
+process.on('uncaughtException', (error) => {
+    console.error('UNCAUGHT EXCEPTION - keeping process alive:', error);
+    
+    // Log error details
+    console.error({
+        message: error.message,
+        stack: error.stack,
+        timestamp: new Date().toISOString()
+    });
+    
+    // Optionally write to a log file
+    try {
+        const fs = require('fs');
+        fs.appendFileSync('server-error.log', `\n[${new Date().toISOString()}] UNCAUGHT EXCEPTION: ${error.message}\n${error.stack}\n---\n`);
+    } catch (logError) {
+        console.error('Failed to write to error log:', logError);
+    }
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('UNHANDLED REJECTION - keeping process alive:', reason);
+    
+    // Log rejection details
+    console.error({
+        reason: reason,
+        stack: reason.stack,
+        timestamp: new Date().toISOString()
+    });
+    
+    // Optionally write to a log file
+    try {
+        const fs = require('fs');
+        fs.appendFileSync('server-error.log', `\n[${new Date().toISOString()}] UNHANDLED REJECTION: ${reason}\n${reason.stack || 'No stack trace'}\n---\n`);
+    } catch (logError) {
+        console.error('Failed to write to error log:', logError);
+    }
+});
+
+// Log when process is exiting and why
+process.on('exit', (code) => {
+    console.log(`Process is about to exit with code: ${code}`);
+});
+
+// Handle termination signals
+process.on('SIGINT', () => {
+    console.log('SIGINT received. Server shutting down...');
+    cleanup();
+    process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+    console.log('SIGTERM received. Server shutting down...');
+    cleanup();
+    process.exit(0);
+});
+
+// Cleanup function to handle resources before shutdown
+function cleanup() {
+    console.log('Cleaning up resources...');
+    
+    // Close all temporary files
+    try {
+        // Delete any temp audio files if they exist
+        const tempDir = os.tmpdir();
+        const tempFiles = fs.readdirSync(tempDir).filter(file => file.startsWith('audio-stream-'));
+        tempFiles.forEach(file => {
+            try {
+                fs.unlinkSync(path.join(tempDir, file));
+                console.log(`Cleaned up temporary file: ${file}`);
+            } catch (err) {
+                console.error(`Failed to delete temp file ${file}:`, err);
+            }
+        });
+    } catch (err) {
+        console.error('Error during cleanup:', err);
+    }
+    
+    // Close any open connections
+    if (io) {
+        console.log('Closing Socket.IO connections...');
+        io.close();
+    }
+}
 
 // Handle socket connections
 io.on('connection', (socket) => {
@@ -430,7 +518,7 @@ io.on('connection', (socket) => {
         }
     });
     
-    // Handle disconnection
+    // Handle disconnect to clean up WebRTC sessions
     socket.on('disconnect', () => {
         console.log(`User disconnected: ${socket.id}`);
         
@@ -451,8 +539,37 @@ io.on('connection', (socket) => {
             }
         }
         
-        // Clean up chat history
-        if (userChatHistories[socket.id]) {
+        // Clean up any WebRTC conversation sessions
+        if (userConversationSessions && userConversationSessions[socket.id]) {
+            const sessionId = userConversationSessions[socket.id];
+            
+            // Clean up the session with OpenAI
+            try {
+                fetch(`https://api.openai.com/v1/audio/conversations/${sessionId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': `Bearer ${openaiApiKey}`,
+                        'OpenAI-Beta': 'audio-conversations=v1'
+                    }
+                }).then(response => {
+                    if (response.ok) {
+                        console.log(`Successfully closed WebRTC session ${sessionId} for ${socket.id}`);
+                    } else {
+                        console.error(`Failed to close WebRTC session ${sessionId} for ${socket.id}`);
+                    }
+                }).catch(error => {
+                    console.error(`Error closing WebRTC session ${sessionId}:`, error);
+                });
+            } catch (error) {
+                console.error(`Error closing WebRTC session for ${socket.id}:`, error);
+            }
+            
+            // Remove from tracking
+            delete userConversationSessions[socket.id];
+        }
+        
+        // Clean up any chat history
+        if (userChatHistories && userChatHistories[socket.id]) {
             delete userChatHistories[socket.id];
         }
     });
@@ -521,53 +638,50 @@ io.on('connection', (socket) => {
         }
     });
     
-    // Handle setting the OpenAI API key from the browser
-    socket.on('set-openai-key', (data) => {
-        const { key } = data;
-        if (!key) {
-            socket.emit('openai-key-status', { 
-                success: false, 
-                error: 'No API key provided' 
-            });
-            return;
-        }
+    // Handle OpenAI API key setup
+    socket.on('set-openai-key', async (data) => {
+        console.log(`Attempting to initialize OpenAI client with key from user ${socket.id}`);
         
-        // Basic validation to ensure it's an OpenAI API key
-        if (!key.trim().startsWith('sk-')) {
-            socket.emit('openai-key-status', { 
-                success: false, 
-                error: 'Invalid API key format. OpenAI API keys should start with "sk-"' 
-            });
+        // Extract key from data object
+        const key = data && data.key;
+        
+        // Clean the key (remove whitespace)
+        const cleanKey = typeof key === 'string' ? key.trim() : null;
+        
+        if (!cleanKey || cleanKey.length < 10) {
+            console.error(`Invalid OpenAI API key from user ${socket.id}: too short or empty`);
+            socket.emit('openai-key-status', { success: false, error: 'Invalid API key format - key is too short or empty' });
             return;
         }
         
         try {
-            // Initialize OpenAI with the provided key
-            console.log(`Attempting to initialize OpenAI client with key from user ${socket.id}`);
-            
-            // Clean the key of any non-standard characters
-            const cleanKey = key.trim();
-            
-            openaiClient = new OpenAI({
-                apiKey: cleanKey
-            });
+            // Create OpenAI client with the provided key
+            openaiClient = new OpenAI({ apiKey: cleanKey });
             
             // Store the key for future use
             openaiApiKey = cleanKey;
             
-            console.log(`Valid OpenAI API key set for user ${socket.id}`);
-            socket.emit('openai-key-status', { success: true });
+            // Debug info about the OpenAI SDK version and structure
+            console.log(`OpenAI client initialized for ${socket.id} with structure:`, {
+                hasClient: !!openaiClient,
+                hasChat: !!openaiClient.chat,
+                hasBeta: !!openaiClient.beta,
+                betaKeys: openaiClient.beta ? Object.keys(openaiClient.beta).join(', ') : 'no beta available',
+                betaChatKeys: openaiClient.beta?.chat ? Object.keys(openaiClient.beta.chat).join(', ') : 'no beta.chat available',
+                hasCreateWebSocket: typeof openaiClient.beta?.chat?.createWebSocket === 'function',
+                version: openaiClient._options ? openaiClient._options.apiVersion || 'unknown' : 'unknown',
+                sdkInfo: openaiClient.clientVersion || 'unknown sdk version'
+            });
             
-            // Test the API key with a simple completion to verify it works
-            openaiClient.chat.completions.create({
-                messages: [{ role: "system", content: "You are a friendly and helpful AI assistant capable of general conversation as well as providing guidance for a VR Pong game." }],
-                model: "gpt-4o-mini",
-                max_tokens: 5
-            }).then(() => {
-                console.log(`API key for ${socket.id} verified successfully`);
-            }).catch(error => {
-                console.error(`API key verification failed for ${socket.id}:`, error);
-                // We don't need to notify the client here as the key was already accepted
+            // Verify the key
+            const listResponse = await openaiClient.models.list();
+            
+            const models = listResponse.data.map(model => model.id).join(', ');
+            console.log(`API key for ${socket.id} verified successfully`);
+            
+            socket.emit('openai-key-status', { 
+                success: true, 
+                models: models.substring(0, 100) + (models.length > 100 ? '...' : '')
             });
         } catch (error) {
             console.error(`Error initializing OpenAI with key from user ${socket.id}:`, error);
@@ -578,9 +692,9 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Handle OpenAI realtime audio chat
-    socket.on('openai-audio-stream', async (data) => {
-        console.log(`Received audio stream request from ${socket.id}`);
+    // Handle separate traditional audio processing path
+    socket.on('openai-audio-traditional', async (data) => {
+        console.log(`Received traditional audio request from ${socket.id}`);
         
         if (!openaiClient) {
             console.log(`No OpenAI client available for ${socket.id}, notifying client`);
@@ -589,76 +703,79 @@ io.on('connection', (socket) => {
         }
         
         try {
-            // Create a temporary file with the audio data
-            const tempDir = os.tmpdir();
-            const tempFilePath = path.join(tempDir, `audio-stream-${socket.id}-${Date.now()}.webm`);
-            
-            // Write base64 audio to file
+            // Convert the audio data to buffer
             let audioBuffer;
             try {
                 audioBuffer = base64ToBuffer(data);
                 if (audioBuffer.length === 0) {
                     throw new Error("Empty or invalid audio data received");
                 }
-                fs.writeFileSync(tempFilePath, audioBuffer);
-                console.log(`Created temporary audio file at ${tempFilePath} for realtime audio streaming (${audioBuffer.length} bytes)`);
+                console.log(`Received ${audioBuffer.length} bytes of audio data from ${socket.id} for traditional processing`);
             } catch (bufferError) {
                 console.error(`Error processing audio data for ${socket.id}:`, bufferError);
                 socket.emit('openai-error', { error: 'Invalid audio format received. Please try again.' });
                 return;
             }
             
+            // Create a temporary file with the audio data
+            const tempDir = os.tmpdir();
+            const tempFilePath = path.join(tempDir, `audio-stream-${socket.id}-${Date.now()}.webm`);
+            
+            // Write audio to file
+            fs.writeFileSync(tempFilePath, audioBuffer);
+            console.log(`Created temporary audio file at ${tempFilePath} for traditional audio processing (${audioBuffer.length} bytes)`);
+            
             // Initialize chat history if it doesn't exist
             if (!userChatHistories[socket.id]) {
                 userChatHistories[socket.id] = [
-                    { role: "system", content: "You are a friendly and helpful AI assistant in a VR Pong game environment. While you can provide tips and guidance about the game, you're also capable of having general conversations on a wide range of topics. Be engaging, informative, and personable. Keep responses concise but helpful." }
+                    { role: "system", content: "You are a friendly and helpful AI assistant in a VR Pong game environment. Keep responses concise but helpful. ALWAYS identify yourself as GPT-4o when asked about your model or capabilities." }
                 ];
             }
             
-            // Using transcription + GPT-4o mini + TTS approach since Audio Conversations API isn't fully available
+            // First transcribe the audio using Whisper
+            const transcriptionResponse = await openaiClient.audio.transcriptions.create({
+                file: fs.createReadStream(tempFilePath),
+                model: "whisper-1"
+            });
+            
+            const transcript = transcriptionResponse.text;
+            console.log(`Transcription for ${socket.id}: ${transcript}`);
+            
+            // Send transcription immediately to client for feedback
+            socket.emit('openai-transcription', transcript);
+            
+            // Now use GPT-4o for the response
+            const messages = [
+                { role: "system", content: "You are GPT-4o, a helpful assistant in a VR Pong game. Keep responses concise but informative. ALWAYS identify yourself as GPT-4o when asked about your model or capabilities." },
+                ...userChatHistories[socket.id].slice(-4), // Include a few recent messages for context
+                { role: "user", content: transcript }
+            ];
+            
+            // Make a completion request
+            console.log(`Making GPT-4o request for ${socket.id} with transcript: ${transcript}`);
+            const completion = await openaiClient.chat.completions.create({
+                model: "gpt-4o",
+                temperature: 0.7,
+                messages: messages
+            });
+            
+            const responseText = completion.choices[0].message.content;
+            const modelUsed = completion.model || "gpt-4o";
+            
+            console.log(`Generated text response with ${modelUsed} for ${socket.id}: ${responseText.substring(0, 50)}...`);
+            
+            // Store the conversation
+            userChatHistories[socket.id].push({ role: "user", content: transcript });
+            userChatHistories[socket.id].push({ role: "assistant", content: responseText });
+            
+            // Send the response to the client
+            socket.emit('openai-response', {
+                text: responseText,
+                model: modelUsed
+            });
+            
+            // Generate speech from the response
             try {
-                // First transcribe the audio
-                const transcriptionResponse = await openaiClient.audio.transcriptions.create({
-                    file: fs.createReadStream(tempFilePath),
-                    model: "whisper-1"
-                });
-                
-                const transcript = transcriptionResponse.text;
-                console.log(`Transcription for ${socket.id}: ${transcript}`);
-                
-                // Send transcription immediately to client for feedback
-                socket.emit('openai-transcription', transcript);
-                
-                // Generate response with GPT-4o mini (not GPT-3.5)
-                const messages = [
-                    { role: "system", content: "You are GPT-4o mini, a helpful assistant in a VR Pong game. Keep responses concise but informative. ALWAYS identify yourself as GPT-4o mini when asked about your model or capabilities." },
-                    ...userChatHistories[socket.id].slice(-4), // Include a few recent messages for context
-                    { role: "user", content: transcript }
-                ];
-                
-                const completion = await openaiClient.chat.completions.create({
-                    model: "gpt-4o-mini",
-                    temperature: 0.7,
-                    messages: messages
-                });
-                
-                const responseText = completion.choices[0].message.content;
-                const modelUsed = completion.model || "gpt-4o-mini";
-                
-                console.log(`Generated text response with ${modelUsed} for ${socket.id}: ${responseText.substring(0, 50)}...`);
-                
-                // Store the conversation
-                userChatHistories[socket.id].push({ role: "user", content: transcript });
-                userChatHistories[socket.id].push({ role: "assistant", content: responseText });
-                
-                // Limit history to keep it manageable
-                if (userChatHistories[socket.id].length > 10) {
-                    userChatHistories[socket.id] = [
-                        userChatHistories[socket.id][0], // Keep system message
-                        ...userChatHistories[socket.id].slice(-9) // Keep last 9 exchanges
-                    ];
-                }
-                
                 // Convert to speech with enhanced TTS model
                 const mp3 = await openaiClient.audio.speech.create({
                     model: "tts-1-hd",
@@ -671,39 +788,524 @@ io.on('connection', (socket) => {
                 const buffer = Buffer.from(await mp3.arrayBuffer());
                 const base64Audio = buffer.toString('base64');
                 
-                // Send complete response to the client
+                // Send audio to the client
                 socket.emit('openai-audio-stream-response', {
                     audioData: base64Audio,
                     text: responseText,
                     model: modelUsed
                 });
-                
-                // Clean up the temporary file
+                console.log(`Generated speech for ${socket.id} with ${modelUsed}`);
+            } catch (speechError) {
+                console.error(`Error generating speech for ${socket.id}:`, speechError);
+                socket.emit('openai-error', { error: 'Failed to generate speech, but text response is available' });
+            }
+            
+            // Clean up the temporary file
+            try {
+                fs.unlinkSync(tempFilePath);
+                console.log(`Deleted temporary file ${tempFilePath}`);
+            } catch (cleanupError) {
+                console.error(`Error deleting temporary file ${tempFilePath}:`, cleanupError);
+            }
+        } catch (apiError) {
+            console.error(`Error in traditional audio processing for ${socket.id}:`, apiError);
+            socket.emit('openai-error', { error: apiError.message || 'An error occurred while processing audio' });
+        }
+    });
+
+    // Handle WebRTC Audio Conversations API (no fallback)
+    socket.on('openai-audio-stream', async (data) => {
+        console.log(`Received audio stream request from ${socket.id} (${typeof data === 'string' ? data.substring(0, 20) + '...' : 'non-string data'})`);
+        
+        if (!openaiClient) {
+            console.log(`No OpenAI client available for ${socket.id}, notifying client`);
+            socket.emit('openai-webrtc-error', { error: 'OpenAI not initialized. Please provide an API key.' });
+            return;
+        }
+        
+        // Debug OpenAI client details - wrap in try/catch to prevent crashes
+        try {
+            console.log(`OpenAI client for WebRTC debug info:`, {
+                apiKey: openaiApiKey ? `${openaiApiKey.substring(0, 5)}...${openaiApiKey.substring(openaiApiKey.length - 4)}` : 'undefined',
+                hasClient: !!openaiClient,
+                clientType: typeof openaiClient,
+                hasBeta: !!openaiClient.beta,
+                betaProperties: openaiClient.beta ? Object.keys(openaiClient.beta) : 'none',
+                audioProperties: openaiClient.audio ? Object.keys(openaiClient.audio) : 'none',
+                sdkVersion: openaiClient.clientVersion || 'unknown',
+                packageVersion: require('openai/package.json').version
+            });
+        } catch (debugError) {
+            console.error('Error while logging debug info:', debugError);
+        }
+        
+        // Use a unique identifier for this request to track it through the logs
+        const requestId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+        console.log(`WebRTC request ${requestId} starting`);
+        
+        // Process the audio data regardless of WebRTC availability
+        try {
+            // Convert the audio data to buffer if not an initialization request
+            let audioBuffer;
+            let tempFilePath = null;
+            
+            if (data && data.length > 0) {
                 try {
-                    fs.unlinkSync(tempFilePath);
-                    console.log(`Deleted temporary file ${tempFilePath}`);
-                } catch (cleanupError) {
-                    console.error(`Error deleting temporary file ${tempFilePath}:`, cleanupError);
-                }
-                
-            } catch (apiError) {
-                console.error(`Error in OpenAI API processing for ${socket.id}:`, apiError);
-                socket.emit('openai-error', { error: apiError.message || 'An error occurred while processing audio' });
-                
-                // Attempt to clean up even if processing failed
-                try {
-                    if (fs.existsSync(tempFilePath)) {
-                        fs.unlinkSync(tempFilePath);
-                        console.log(`Deleted temporary file ${tempFilePath} after error`);
+                    audioBuffer = base64ToBuffer(data);
+                    if (!audioBuffer || audioBuffer.length === 0) {
+                        throw new Error("Empty or invalid audio data received");
                     }
-                } catch (cleanupError) {
-                    console.error(`Error deleting temporary file ${tempFilePath}:`, cleanupError);
+                    
+                    console.log(`Request ${requestId}: Received ${audioBuffer.length} bytes of audio data from ${socket.id}`);
+                    
+                    // Create a temporary file with the audio data if needed later
+                    const tempDir = os.tmpdir();
+                    tempFilePath = path.join(tempDir, `audio-stream-${socket.id}-${requestId}.webm`);
+                    
+                    // Write audio to file
+                    fs.writeFileSync(tempFilePath, audioBuffer);
+                    console.log(`Request ${requestId}: Created temporary audio file at ${tempFilePath} (${audioBuffer.length} bytes)`);
+                } catch (bufferError) {
+                    console.error(`Request ${requestId}: Error processing audio data:`, bufferError);
+                    socket.emit('openai-webrtc-error', { error: 'Invalid audio format received: ' + bufferError.message });
+                    cleanupTempFile(tempFilePath);
+                    return;
                 }
             }
             
+            // Check if the package version is new enough to support audio conversations
+            let packageVersion;
+            try {
+                packageVersion = require('openai/package.json').version;
+                const versionParts = packageVersion.split('.');
+                const majorVersion = parseInt(versionParts[0], 10);
+                const minorVersion = parseInt(versionParts[1], 10);
+                
+                // Audio conversations requires v4.28.0+
+                const hasCompatibleVersion = majorVersion > 4 || (majorVersion === 4 && minorVersion >= 28);
+                console.log(`Request ${requestId}: OpenAI SDK version check: ${packageVersion}, compatible: ${hasCompatibleVersion}`);
+                
+                if (!hasCompatibleVersion) {
+                    console.error(`Request ${requestId}: Audio Conversations API requires OpenAI SDK v4.28.0+, but found ${packageVersion}`);
+                    socket.emit('openai-webrtc-error', { 
+                        error: `Audio Conversations API requires OpenAI SDK v4.28.0+, but found ${packageVersion}`
+                    });
+                    cleanupTempFile(tempFilePath);
+                    return;
+                }
+            } catch (versionError) {
+                console.error(`Request ${requestId}: Error checking SDK version:`, versionError);
+            }
+            
+            // APPROACH: Direct REST API to Realtime API
+            try {
+                // Check if fetch is available
+                if (typeof fetch !== 'function') {
+                    throw new Error("Fetch API not available in this Node.js environment");
+                }
+                
+                console.log(`Request ${requestId}: Creating WebRTC audio conversation via REST API`);
+                
+                // Use the newer Realtime API endpoint structure as documented
+                const realtimeUrl = 'https://api.openai.com/v1/realtime/sessions';
+                
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 8000);
+                
+                // Make the request with the correct headers for Realtime API
+                const sessionResponse = await fetch(realtimeUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${openaiApiKey}`,
+                        'OpenAI-Beta': 'realtime=v1' // Use realtime beta header
+                    },
+                    body: JSON.stringify({
+                        model: "gpt-4o-realtime-preview-2024-12-17", // Use realtime model string
+                        voice: "shimmer", // Specify a voice
+                        instructions: "You are GPT-4o, a helpful assistant speaking in a VR Pong game environment. Keep responses concise but informative. Always identify yourself as GPT-4o when asked about your model or capabilities.",
+                        input_audio_transcription: { model: "whisper-1" }, // Use Whisper for transcription
+                        turn_detection: { type: "server_vad" } // Server-side voice activity detection
+                    }),
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+                
+                // Log detailed response information for debugging
+                console.log(`Request ${requestId}: API Response status: ${sessionResponse.status}`);
+                console.log(`Request ${requestId}: API Response headers:`, [...sessionResponse.headers.entries()]);
+                
+                if (!sessionResponse.ok) {
+                    let errorText = '';
+                    let errorJson = null;
+                    
+                    try {
+                        // Try to parse as JSON first
+                        errorJson = await sessionResponse.json();
+                        errorText = JSON.stringify(errorJson);
+                        console.log(`Request ${requestId}: Error JSON:`, errorJson);
+                    } catch (e) {
+                        // Fall back to text if not JSON
+                        try {
+                            errorText = await sessionResponse.text();
+                        } catch (e2) {
+                            errorText = `[Error reading response: ${e2.message}]`;
+                        }
+                    }
+                    
+                    console.error(`Request ${requestId}: API failed with status ${sessionResponse.status}: ${errorText}`);
+                    
+                    if (sessionResponse.status === 404) {
+                        throw new Error(`Realtime API endpoint not found (404). The feature may be unavailable or the URL has changed.`);
+                    } else if (sessionResponse.status === 403 || sessionResponse.status === 401) {
+                        throw new Error(`Authorization error (${sessionResponse.status}). Your API key may not have access to the Realtime API.`);
+                    } else {
+                        throw new Error(`REST API approach failed: ${sessionResponse.status} - ${errorText}`);
+                    }
+                }
+                
+                const sessionData = await sessionResponse.json();
+                console.log(`Request ${requestId}: Session data:`, sessionData);
+                
+                // Check that the session data has the expected structure
+                if (!sessionData.id || !sessionData.client_secret || !sessionData.client_secret.value) {
+                    throw new Error(`Unexpected session data structure from API. Missing id or client_secret.`);
+                }
+                
+                const sessionId = sessionData.id;
+                const clientSecret = sessionData.client_secret.value;
+                
+                console.log(`Request ${requestId}: Successfully created Realtime session with ID ${sessionId}`);
+                
+                // Send token to client for WebRTC
+                socket.emit('openai-webrtc-token', {
+                    sessionId: sessionId,
+                    token: clientSecret,
+                    model: "gpt-4o-realtime-preview-2024-12-17",
+                    // Include default ICE servers since Realtime API doesn't provide them
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun2.l.google.com:19302' },
+                        { urls: 'stun:stun3.l.google.com:19302' },
+                        { urls: 'stun:stun4.l.google.com:19302' }
+                    ]
+                });
+                
+                console.log(`Request ${requestId}: Sent Realtime token to client ${socket.id}`);
+                
+                // Store session ID for cleanup
+                if (!userConversationSessions) {
+                    userConversationSessions = {};
+                }
+                userConversationSessions[socket.id] = sessionId;
+                
+                cleanupTempFile(tempFilePath);
+                return; // Exit the function if the approach was successful
+                
+            } catch (apiError) {
+                console.error(`Request ${requestId}: REST API approach failed:`, apiError);
+                
+                // Let the client know the approach failed with detailed error information
+                socket.emit('openai-webrtc-error', { 
+                    error: `WebRTC approach failed: ${apiError.message}`
+                });
+            }
+            
+            // If we reach here, all approaches failed
+            cleanupTempFile(tempFilePath);
+            
+        } catch (generalError) {
+            console.error(`Request ${requestId}: General error in audio processing:`, generalError);
+            socket.emit('openai-webrtc-error', { error: 'Unexpected error: ' + generalError.message });
+        }
+    });
+    
+    // Helper function to clean up temp files
+    function cleanupTempFile(filePath) {
+        if (filePath) {
+            try {
+                if (fs.existsSync(filePath)) {
+                    fs.unlinkSync(filePath);
+                    console.log(`Deleted temporary file ${filePath}`);
+                }
+            } catch (cleanupError) {
+                console.error(`Error deleting temporary file ${filePath}:`, cleanupError);
+            }
+        }
+    }
+    
+    // Signaling for WebRTC
+    socket.on('webrtc-offer', async (data) => {
+        console.log(`Received WebRTC offer from client ${socket.id}`);
+        
+        if (!openaiApiKey) {
+            console.log(`No OpenAI API key available for ${socket.id}`);
+            socket.emit('openai-error', { error: 'OpenAI API key not set' });
+            return;
+        }
+        
+        try {
+            // Forward the offer to OpenAI's WebRTC service
+            const conversationsUrl = `https://api.openai.com/v1/audio/conversations/${data.sessionId}/signal`;
+            
+            const signalResponse = await fetch(conversationsUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${openaiApiKey}`,
+                    'OpenAI-Beta': 'audio-conversations=v1'
+                },
+                body: JSON.stringify({
+                    token: data.token,
+                    signal: {
+                        type: data.offer.type,
+                        sdp: data.offer.sdp
+                    }
+                })
+            });
+            
+            if (!signalResponse.ok) {
+                const errorText = await signalResponse.text();
+                throw new Error(`Failed to send WebRTC offer: ${signalResponse.status} - ${errorText}`);
+            }
+            
+            // Wait for the answer from OpenAI
+            const answerResponse = await fetch(`${conversationsUrl}/poll`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${openaiApiKey}`,
+                    'OpenAI-Beta': 'audio-conversations=v1'
+                },
+                body: JSON.stringify({
+                    token: data.token
+                })
+            });
+            
+            if (!answerResponse.ok) {
+                const errorText = await answerResponse.text();
+                throw new Error(`Failed to poll for WebRTC answer: ${answerResponse.status} - ${errorText}`);
+            }
+            
+            const answerData = await answerResponse.json();
+            
+            // Send answer back to client
+            socket.emit('webrtc-answer', {
+                answer: {
+                    type: answerData.signal.type,
+                    sdp: answerData.signal.sdp
+                }
+            });
+            
+            console.log(`Sent WebRTC answer to client ${socket.id}`);
+            
         } catch (error) {
-            console.error(`General error in audio processing for ${socket.id}:`, error);
-            socket.emit('openai-error', { error: error.message || 'An error occurred while processing audio' });
+            console.error(`Error handling WebRTC offer for ${socket.id}:`, error);
+            socket.emit('openai-error', { 
+                error: `WebRTC signaling error: ${error.message}`,
+                useFallback: true
+            });
+        }
+    });
+    
+    // Handle ICE candidates from client
+    socket.on('webrtc-ice-candidate', async (data) => {
+        console.log(`Received ICE candidate from client ${socket.id}`);
+        
+        if (!openaiApiKey) {
+            console.log(`No OpenAI API key available for ${socket.id}`);
+            return;
+        }
+        
+        try {
+            // Forward ICE candidate to OpenAI
+            const conversationsUrl = `https://api.openai.com/v1/audio/conversations/${data.sessionId}/signal`;
+            
+            const response = await fetch(conversationsUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${openaiApiKey}`,
+                    'OpenAI-Beta': 'audio-conversations=v1'
+                },
+                body: JSON.stringify({
+                    token: data.token,
+                    signal: {
+                        type: 'ice-candidate',
+                        ice: data.candidate
+                    }
+                })
+            });
+            
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`Failed to send ICE candidate: ${response.status} - ${errorText}`);
+            }
+            
+            console.log(`Forwarded ICE candidate for ${socket.id}`);
+            
+        } catch (error) {
+            console.error(`Error handling ICE candidate for ${socket.id}:`, error);
+        }
+    });
+    
+    // Handle session close request
+    socket.on('close-webrtc-session', async (data) => {
+        console.log(`Received request to close WebRTC session ${data.sessionId} from ${socket.id}`);
+        
+        if (!openaiApiKey) {
+            return;
+        }
+        
+        try {
+            // Close the session with OpenAI
+            const response = await fetch(`https://api.openai.com/v1/audio/conversations/${data.sessionId}`, {
+                method: 'DELETE',
+                headers: {
+                    'Authorization': `Bearer ${openaiApiKey}`,
+                    'OpenAI-Beta': 'audio-conversations=v1'
+                }
+            });
+            
+            if (response.ok) {
+                console.log(`Successfully closed WebRTC session ${data.sessionId} for ${socket.id}`);
+            } else {
+                console.error(`Failed to close WebRTC session ${data.sessionId} for ${socket.id}`);
+            }
+        } catch (error) {
+            console.error(`Error closing WebRTC session ${data.sessionId}:`, error);
+        }
+        
+        // Clean up session tracking
+        if (userConversationSessions && userConversationSessions[socket.id]) {
+            delete userConversationSessions[socket.id];
+        }
+    });
+    
+    // Handle direct request to create a realtime session without audio data
+    socket.on('create-realtime-session', async () => {
+        console.log(`Received request to create a Realtime session from ${socket.id}`);
+        
+        if (!openaiClient) {
+            console.log(`No OpenAI client available for ${socket.id}, notifying client`);
+            socket.emit('openai-webrtc-error', { error: 'OpenAI not initialized. Please provide an API key.' });
+            return;
+        }
+        
+        // Use a unique identifier for this request to track it through the logs
+        const requestId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+        console.log(`Realtime session request ${requestId} starting`);
+        
+        try {
+            // Check if fetch is available
+            if (typeof fetch !== 'function') {
+                throw new Error("Fetch API not available in this Node.js environment");
+            }
+            
+            console.log(`Request ${requestId}: Creating Realtime session via REST API`);
+            
+            // Use the newer Realtime API endpoint structure as documented
+            const realtimeUrl = 'https://api.openai.com/v1/realtime/sessions';
+            
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 8000);
+            
+            // Make the request with the correct headers for Realtime API
+            const sessionResponse = await fetch(realtimeUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${openaiApiKey}`,
+                    'OpenAI-Beta': 'realtime=v1' // Use realtime beta header
+                },
+                body: JSON.stringify({
+                    model: "gpt-4o-realtime-preview-2024-12-17", // Use realtime model string
+                    voice: "shimmer", // Specify a voice
+                    instructions: "You are GPT-4o, a helpful assistant speaking in a VR Pong game environment. Keep responses concise but informative. Always identify yourself as GPT-4o when asked about your model or capabilities.",
+                    input_audio_transcription: { model: "whisper-1" }, // Use Whisper for transcription
+                    turn_detection: { type: "server_vad" } // Server-side voice activity detection
+                }),
+                signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
+            
+            // Log detailed response information for debugging
+            console.log(`Request ${requestId}: API Response status: ${sessionResponse.status}`);
+            
+            if (!sessionResponse.ok) {
+                let errorText = '';
+                let errorJson = null;
+                
+                try {
+                    // Try to parse as JSON first
+                    errorJson = await sessionResponse.json();
+                    errorText = JSON.stringify(errorJson);
+                    console.log(`Request ${requestId}: Error JSON:`, errorJson);
+                } catch (e) {
+                    // Fall back to text if not JSON
+                    try {
+                        errorText = await sessionResponse.text();
+                    } catch (e2) {
+                        errorText = `[Error reading response: ${e2.message}]`;
+                    }
+                }
+                
+                console.error(`Request ${requestId}: API failed with status ${sessionResponse.status}: ${errorText}`);
+                
+                if (sessionResponse.status === 404) {
+                    throw new Error(`Realtime API endpoint not found (404). The feature may be unavailable or the URL has changed.`);
+                } else if (sessionResponse.status === 403 || sessionResponse.status === 401) {
+                    throw new Error(`Authorization error (${sessionResponse.status}). Your API key may not have access to the Realtime API.`);
+                } else {
+                    throw new Error(`REST API approach failed: ${sessionResponse.status} - ${errorText}`);
+                }
+            }
+            
+            const sessionData = await sessionResponse.json();
+            console.log(`Request ${requestId}: Session data received (details omitted for security)`);
+            
+            // Check that the session data has the expected structure
+            if (!sessionData.id || !sessionData.client_secret || !sessionData.client_secret.value) {
+                throw new Error(`Unexpected session data structure from API. Missing id or client_secret.`);
+            }
+            
+            const sessionId = sessionData.id;
+            const clientSecret = sessionData.client_secret.value;
+            
+            console.log(`Request ${requestId}: Successfully created Realtime session with ID ${sessionId}`);
+            
+            // Send token to client for WebRTC
+            socket.emit('openai-webrtc-token', {
+                sessionId: sessionId,
+                token: clientSecret,
+                model: "gpt-4o-realtime-preview-2024-12-17",
+                // Include default ICE servers since Realtime API doesn't provide them
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                    { urls: 'stun:stun2.l.google.com:19302' },
+                    { urls: 'stun:stun3.l.google.com:19302' },
+                    { urls: 'stun:stun4.l.google.com:19302' }
+                ]
+            });
+            
+            console.log(`Request ${requestId}: Sent Realtime token to client ${socket.id}`);
+            
+            // Store session ID for cleanup
+            if (!userConversationSessions) {
+                userConversationSessions = {};
+            }
+            userConversationSessions[socket.id] = sessionId;
+            
+        } catch (error) {
+            console.error(`Request ${requestId}: Error creating Realtime session:`, error);
+            socket.emit('openai-webrtc-error', { 
+                error: `Failed to create Realtime session: ${error.message}`,
+                useFallback: false
+            });
         }
     });
 });
@@ -729,19 +1331,126 @@ function base64ToBuffer(base64) {
             base64String = base64.audio;
         }
         
-        // Check if it's a data URL (starts with 'data:')
-        if (typeof base64String === 'string' && base64String.includes(',')) {
-            // It's a data URL, split at the comma
-            return Buffer.from(base64String.split(',')[1], 'base64');
-        } else if (typeof base64String === 'string') {
-            // It's already a base64 string without the data URL prefix
-            return Buffer.from(base64String, 'base64');
-        } else {
-            console.error("Invalid base64 format:", typeof base64String);
+        // Check if base64String is valid
+        if (!base64String) {
+            console.error("Invalid base64 data structure");
             return Buffer.from([]);
         }
+
+        // If the base64 data includes a data URL prefix (common with FileReader), remove it
+        if (typeof base64String === 'string' && base64String.includes('base64,')) {
+            base64String = base64String.split('base64,')[1];
+        }
+        
+        return Buffer.from(base64String, 'base64');
     } catch (error) {
         console.error("Error converting base64 to buffer:", error);
         return Buffer.from([]);
     }
 }
+
+// Handle creating a new Realtime API session
+app.post('/api/create-realtime-session', async (req, res) => {
+    console.log('Creating a new Realtime API session');
+    
+    if (!openaiApiKey) {
+        console.error('No OpenAI API key available for Realtime session');
+        return res.status(401).json({ 
+            error: 'OpenAI API key not configured. Please set your API key first.' 
+        });
+    }
+    
+    try {
+        // Log OpenAI SDK version
+        const openaiVersion = require('openai/package.json').version;
+        console.log(`Using OpenAI SDK version: ${openaiVersion}`);
+        
+        // Create a session with the OpenAI Realtime API
+        const sessionResponse = await fetch("https://api.openai.com/v1/realtime/sessions", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${openaiApiKey}`,
+                "Content-Type": "application/json",
+                "OpenAI-Beta": "realtime=v1" // Ensure beta header is set
+            },
+            body: JSON.stringify({
+                model: "gpt-4o-realtime-preview-2024-12-17", // Use the realtime model as specified in docs
+                voice: "shimmer", // Use a voice preset
+                instructions: "You are GPT-4o, a helpful assistant speaking in a VR Pong game environment. " +
+                              "Keep responses concise but informative. Always identify yourself as GPT-4o " +
+                              "when asked about your model or capabilities.",
+                input_audio_transcription: { model: "whisper-1" }, // Use Whisper for transcription
+                turn_detection: { type: "server_vad" } // Server-side voice activity detection
+            })
+        });
+        
+        // Log the response status and headers for debugging
+        console.log(`Realtime session creation response status: ${sessionResponse.status}`);
+        console.log('Response headers:', [...sessionResponse.headers.entries()]);
+        
+        if (!sessionResponse.ok) {
+            let errorText;
+            try {
+                // Try to parse as JSON first
+                const errorJson = await sessionResponse.json();
+                errorText = JSON.stringify(errorJson);
+            } catch {
+                // Fallback to text if not JSON
+                errorText = await sessionResponse.text();
+            }
+            
+            console.error(`Failed to create Realtime session: ${sessionResponse.status} - ${errorText}`);
+            
+            // Provide specific guidance based on the error
+            if (sessionResponse.status === 404) {
+                return res.status(404).json({ 
+                    error: `Realtime API not available for your API key (404 Not Found). This feature is in limited beta.`,
+                    details: `To use this feature, you need:
+                    1. A paid OpenAI API account with GPT-4 access
+                    2. Access to the Realtime API beta program
+                    3. The latest OpenAI SDK version
+                    
+                    Please check your OpenAI dashboard to ensure you have access to the gpt-4o-realtime model.
+                    If not visible there, you may need to request access through OpenAI's website.`
+                });
+            } else {
+                return res.status(sessionResponse.status).json({ 
+                    error: `OpenAI Realtime API error: ${errorText}`
+                });
+            }
+        }
+        
+        // Parse the successful response
+        const session = await sessionResponse.json();
+        console.log('Session response data structure:', Object.keys(session));
+        
+        // Check the structure of the response based on docs
+        if (!session.client_secret || !session.client_secret.value || !session.id) {
+            console.error('Unexpected Realtime API response structure:', session);
+            return res.status(500).json({
+                error: 'Unexpected API response structure'
+            });
+        }
+        
+        // Extract the ephemeral key (client secret) - this is short-lived (~60 seconds)
+        const ephemeralKey = session.client_secret.value;
+        const sessionId = session.id;
+        
+        console.log(`Created Realtime session ${sessionId} with ephemeral key ${ephemeralKey.substring(0, 10)}...`);
+        
+        // Return only the necessary information to the client
+        res.json({
+            ephemeralKey: ephemeralKey,
+            sessionId: sessionId,
+            model: "gpt-4o-realtime-preview-2024-12-17",
+            voice: "shimmer"
+        });
+        
+    } catch (error) {
+        console.error('Error creating Realtime session:', error);
+        res.status(500).json({ 
+            error: 'Failed to create Realtime session: ' + error.message,
+            solution: 'This may be due to SDK version mismatch or API access restrictions. Please ensure you have the latest OpenAI SDK and proper API access.'
+        });
+    }
+});
