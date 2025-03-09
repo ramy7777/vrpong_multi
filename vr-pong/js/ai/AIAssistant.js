@@ -2538,4 +2538,109 @@ export class AIAssistant {
             }
         }
     }
+    
+    // Handle score updates from the game
+    handleScoreUpdate(playerScore, aiScore, scoringPlayer) {
+        // Only proceed if we have a chat UI to display messages
+        if (!this.container) return;
+        
+        // Always update score in the chat
+        const scoreMessage = `Score Update: You ${playerScore} - ${aiScore} AI`;
+        this.showScoreUpdate(scoreMessage);
+        
+        // Occasionally add commentary based on the score differential
+        const scoreDiff = playerScore - aiScore;
+        const totalScore = playerScore + aiScore;
+        
+        // Generate commentary based on game situation
+        if (scoringPlayer === 'player') {
+            // Player just scored
+            if (Math.random() < 0.3) { // 30% chance of commentary
+                if (scoreDiff > 3) {
+                    this.addCommentary("Nice shot! You're really dominating this match!");
+                } else if (scoreDiff > 0) {
+                    this.addCommentary("Good job! Keep up the momentum!");
+                } else if (scoreDiff === 0) {
+                    this.addCommentary("You've tied it up! Great comeback!");
+                } else {
+                    this.addCommentary("That's one back! Keep chipping away at the lead!");
+                }
+            }
+        } else {
+            // AI just scored
+            if (Math.random() < 0.3) { // 30% chance of commentary
+                if (scoreDiff < -3) {
+                    this.addCommentary("Ouch! The AI is on fire right now.");
+                } else if (scoreDiff < 0) {
+                    this.addCommentary("The AI scores again. Stay focused!");
+                } else if (scoreDiff === 0) {
+                    this.addCommentary("The AI has tied it up. Time to regain the lead!");
+                } else {
+                    this.addCommentary("The AI got one back. Don't let them build momentum!");
+                }
+            }
+        }
+        
+        // Special commentary for milestone scores
+        if (totalScore === 5) {
+            this.addCommentary("The game is heating up! Remember to watch the ball trajectory.");
+        } else if (totalScore === 10) {
+            this.addCommentary("We're seeing some great pong action here!");
+        } else if (playerScore === 10 || aiScore === 10) {
+            this.addCommentary("Double digits! This is getting serious!");
+        }
+        
+        // Advice for players falling behind
+        if (scoreDiff < -3 && Math.random() < 0.5) {
+            this.addCommentary("Tip: Try to anticipate the AI's movements and position your paddle early.");
+        } else if (scoreDiff > 3 && Math.random() < 0.3) {
+            this.addCommentary("You're making this look easy! Try some angle shots to challenge yourself.");
+        }
+    }
+    
+    // Display score update in the chat
+    showScoreUpdate(message) {
+        // Create a score update element
+        const scoreUpdateElement = document.createElement('div');
+        scoreUpdateElement.className = 'ai-assistant-score-update';
+        scoreUpdateElement.textContent = message;
+        scoreUpdateElement.style.textAlign = 'center';
+        scoreUpdateElement.style.padding = '5px';
+        scoreUpdateElement.style.margin = '5px 0';
+        scoreUpdateElement.style.backgroundColor = 'rgba(0, 0, 0, 0.2)';
+        scoreUpdateElement.style.borderRadius = '4px';
+        scoreUpdateElement.style.fontSize = '14px';
+        scoreUpdateElement.style.color = '#aaffaa';
+        
+        // Add to chat display
+        if (this.chatDisplay) {
+            this.chatDisplay.appendChild(scoreUpdateElement);
+            // Scroll to bottom
+            this.chatDisplay.scrollTop = this.chatDisplay.scrollHeight;
+        }
+    }
+    
+    // Add commentary as an assistant message
+    addCommentary(comment) {
+        // Use a subtle way to add commentary that doesn't clutter the chat too much
+        const commentaryElement = document.createElement('div');
+        commentaryElement.className = 'ai-assistant-commentary';
+        commentaryElement.textContent = comment;
+        commentaryElement.style.padding = '5px 10px';
+        commentaryElement.style.margin = '5px 0';
+        commentaryElement.style.backgroundColor = 'rgba(0, 0, 0, 0.3)';
+        commentaryElement.style.borderRadius = '8px';
+        commentaryElement.style.fontSize = '14px';
+        commentaryElement.style.fontStyle = 'italic';
+        commentaryElement.style.color = '#ccccff';
+        commentaryElement.style.textAlign = 'left';
+        commentaryElement.style.borderLeft = '3px solid #5577ff';
+        
+        // Add to chat display
+        if (this.chatDisplay) {
+            this.chatDisplay.appendChild(commentaryElement);
+            // Scroll to bottom
+            this.chatDisplay.scrollTop = this.chatDisplay.scrollHeight;
+        }
+    }
 } 

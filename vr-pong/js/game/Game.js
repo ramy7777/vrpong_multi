@@ -1331,6 +1331,9 @@ export class Game {
                             // Emit score event for haptic feedback
                             this.emit('score', { side: 'ai' });
                             
+                            // Notify AI Assistant about score change
+                            this.notifyAIAssistantOfScoreChange('ai');
+                            
                             // Sync scores in multiplayer mode
                             if (this.isMultiplayer && this.multiplayerManager && this.isLocalPlayer) {
                                 this.multiplayerManager.updateScore(this.playerScore, this.aiScore);
@@ -1352,6 +1355,9 @@ export class Game {
                             
                             // Emit score event for haptic feedback
                             this.emit('score', { side: 'player' });
+                            
+                            // Notify AI Assistant about score change
+                            this.notifyAIAssistantOfScoreChange('player');
                             
                             // Sync scores in multiplayer mode
                             if (this.isMultiplayer && this.multiplayerManager && this.isLocalPlayer) {
@@ -1815,5 +1821,13 @@ export class Game {
         this.eventListeners = {};
         
         console.log("Game cleanup complete");
+    }
+
+    // Notify the AI Assistant about score changes
+    notifyAIAssistantOfScoreChange(scoringPlayer) {
+        if (this.aiAssistant && !this.isMultiplayer) {
+            // Only notify in single player mode
+            this.aiAssistant.handleScoreUpdate(this.playerScore, this.aiScore, scoringPlayer);
+        }
     }
 }
