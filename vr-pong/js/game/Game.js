@@ -21,6 +21,19 @@ import { AIAssistant } from '../ai/AIAssistant.js';
 
 export class Game {
     constructor() {
+        this.scene = null;
+        this.camera = null;
+        this.renderer = null;
+        this.vrButton = null;
+        
+        // Store game instance in window for global access
+        window.game = this;
+        
+        // Game state
+        this.isGameStarted = false;
+        this.isGameOver = false;
+        this.isPaused = false;
+        
         // Initialize Three.js scene and renderer
         this.scene = new THREE.Scene();
         this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
@@ -238,29 +251,47 @@ export class Game {
                     // Hide start button until someone joins
                     this.startButton.hide();
                     this.showMessage('Hosting a game. Waiting for players...');
+                    // Update status display
+                    this.updateMultiplayerStatus(true, true);
                 } else {
-                    console.log("Not connected to server");
-                    this.showMessage('Not connected to server. Please try again.');
+                    console.error("Cannot host: Not connected to server");
+                    this.showMessage('Error: Not connected to server');
                 }
             },
             onJoin: () => {
                 if (this.multiplayerManager.isConnected) {
-                    console.log("Attempting to join a game...");
-                    this.multiplayerManager.quickJoin();
+                    console.log("Attempting to join a quick game...");
+                    this.multiplayerManager.joinQuickGame();
                     this.multiplayerMenu.hide();
-                    // Hide start button for guest
+                    // Hide start button until host starts
                     this.startButton.hide();
-                    this.showMessage('Searching for a game to join...');
+                    this.showMessage('Joining a game. Please wait...');
+                    // Update status display
+                    this.updateMultiplayerStatus(true, false);
                 } else {
-                    console.log("Not connected to server");
-                    this.showMessage('Not connected to server. Please try again.');
+                    console.error("Cannot join: Not connected to server");
+                    this.showMessage('Error: Not connected to server');
                 }
             },
             onBack: () => {
-                // Return to main menu
-                console.log("Returning to main menu");
+                console.log("Back to start screen...");
                 this.multiplayerMenu.hide();
                 this.startButton.show();
+            },
+            onWebRTC: () => {
+                // Toggle WebRTC mode in the AI Assistant if it exists
+                if (this.aiAssistant) {
+                    console.log("Toggling WebRTC mode in AI Assistant");
+                    this.aiAssistant.toggleRealtimeMode();
+                    
+                    // Show a message indicating the current WebRTC state
+                    const stateMsg = this.aiAssistant.realtimeMode ? 'WebRTC Enabled' : 'WebRTC Disabled';
+                    this.showMessage(stateMsg);
+                } else {
+                    console.log("AI Assistant not initialized, creating it now");
+                    this.createAIAssistant();
+                    this.showMessage('AI Assistant initialized');
+                }
             }
         });
     }

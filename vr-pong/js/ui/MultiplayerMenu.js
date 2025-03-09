@@ -8,14 +8,16 @@ export class MultiplayerMenu {
             singleplayer: null,
             host: null,
             join: null,
-            back: null
+            back: null,
+            webrtc: null
         };
         this.isVisible = false;
         this.callbacks = {
             onSinglePlayer: null,
             onHost: null,
             onJoin: null,
-            onBack: null
+            onBack: null,
+            onWebRTC: null
         };
         
         // Track currently hovered button
@@ -48,12 +50,17 @@ export class MultiplayerMenu {
             join: {
                 base: 0xFFA000, // Amber
                 hover: 0xFFB300,
-                click: 0xFF8F00
+                click: 0xF57C00
             },
             back: {
                 base: 0xE53935, // Red
                 hover: 0xEF5350,
                 click: 0xC62828
+            },
+            webrtc: {
+                base: 0x9C27B0, // Purple
+                hover: 0xBA68C8,
+                click: 0x7B1FA2
             }
         };
         
@@ -219,6 +226,9 @@ export class MultiplayerMenu {
         this.buttons.back = this.createButton('BACK', 0, -0.45, 0.02, 'back');
         this.menuGroup.add(this.buttons.back);
         
+        this.buttons.webrtc = this.createButton('WEBRTC', 0, -0.65, 0.02, 'webrtc');
+        this.menuGroup.add(this.buttons.webrtc);
+        
         // Position the menu in front of the player
         this.menuGroup.position.set(0, 1.6, -1.0);
         this.scene.add(this.menuGroup);
@@ -226,6 +236,16 @@ export class MultiplayerMenu {
     
     createButton(text, x, y, z, buttonType) {
         const group = new THREE.Group();
+        
+        // Special case for WebRTC button
+        if (buttonType === 'webrtc') {
+            // Try to get the current state from the AI Assistant
+            let webrtcState = 'OFF';
+            if (window.game && window.game.aiAssistant) {
+                webrtcState = window.game.aiAssistant.realtimeMode ? 'ON' : 'OFF';
+            }
+            text = `WEBRTC: ${webrtcState}`;
+        }
         
         // Create rounded button geometry - increase width for longer text
         const buttonWidth = text.length > 10 ? 0.7 : 0.6;
@@ -327,17 +347,17 @@ export class MultiplayerMenu {
             context.globalCompositeOperation = 'source-over';
         }
         
+        // Create text on button
+        const textGeometry = new THREE.PlaneGeometry(buttonWidth - 0.05, 0.1);
         const textTexture = new THREE.CanvasTexture(canvas);
         const textMaterial = new THREE.MeshBasicMaterial({
             map: textTexture,
             transparent: true
         });
         
-        // Adjust text plane size to match button width
-        const textWidth = text.length > 10 ? 0.65 : 0.55;
-        const textGeometry = new THREE.PlaneGeometry(textWidth, 0.1);
         const textMesh = new THREE.Mesh(textGeometry, textMaterial);
-        textMesh.position.z = 0.021;
+        textMesh.position.z = 0.021; // Position slightly in front of button
+        textMesh.userData = { isButtonText: true }; // Mark for easy identification
         group.add(textMesh);
         
         // Set position
@@ -437,36 +457,111 @@ export class MultiplayerMenu {
         this.currentHoveredButton = null;
     }
     
+    // Method to update the WebRTC button text based on current state
+    updateWebRTCButtonText() {
+        if (this.buttons.webrtc) {
+            let webrtcState = 'OFF';
+            if (window.game && window.game.aiAssistant) {
+                webrtcState = window.game.aiAssistant.realtimeMode ? 'ON' : 'OFF';
+            }
+            
+            // Update the button text with the current state
+            const button = this.buttons.webrtc;
+            const text = `WEBRTC: ${webrtcState}`;
+            
+            // Create a new text texture
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            canvas.width = 256;
+            canvas.height = 64;
+            
+            // Clear the canvas
+            context.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Add subtle gradient to text
+            const textGradient = context.createLinearGradient(0, 0, 0, canvas.height);
+            textGradient.addColorStop(0, '#ffffff');
+            textGradient.addColorStop(1, '#f0f0f0');
+            
+            context.fillStyle = textGradient;
+            
+            // Adjust font size based on text length
+            let fontSize = text.length > 10 ? 28 : 32;
+            
+            // Set font with Orbitron if loaded, or fallback
+            context.font = `bold ${fontSize}px ${this.fontLoaded ? 'Orbitron' : 'Arial'}, sans-serif`;
+            context.textAlign = 'center';
+            context.textBaseline = 'middle';
+            
+            // Add shadow to text
+            context.shadowColor = 'rgba(0, 0, 0, 0.5)';
+            context.shadowBlur = 4;
+            context.shadowOffsetX = 2;
+            context.shadowOffsetY = 2;
+            
+            // Draw text
+            context.fillText(text, canvas.width / 2, canvas.height / 2);
+            
+            // Find the text mesh in the button
+            const textMesh = button.children.find(child => child.userData && child.userData.isButtonText);
+            if (textMesh) {
+                // Update the texture
+                const texture = textMesh.material.map;
+                if (texture) {
+                    texture.image = canvas;
+                    texture.needsUpdate = true;
+                }
+            }
+        }
+    }
+    
+    // Updated pressButton method to update WebRTC button text after pressing
     pressButton(buttonKey) {
+        console.log(`Button pressed: ${buttonKey}`);
+        
+        // Don't process presses if the menu was just shown (prevents accidental presses)
+        const currentTime = Date.now();
+        if (currentTime - this.showTime < this.showDelay) {
+            console.log("Ignoring button press - menu just opened");
+            return;
+        }
+        
+        // Implement debounce mechanism for button press
+        if (currentTime - this.lastButtonPressTime < this.buttonCooldown) {
+            console.log("Ignoring button press - cooldown active");
+            return;
+        }
+        this.lastButtonPressTime = currentTime;
+        
+        if (!this.isVisible) return;
+        
         if (!this.buttons[buttonKey]) return;
         
-        // Implement debounce to prevent rapid repeated button presses
-        const now = Date.now();
+        // Visual feedback for button press
+        const button = this.buttons[buttonKey];
+        const buttonMesh = button.children[0];
         
-        // Skip button press if we're still in the initial delay period
-        if (now - this.showTime < this.showDelay) {
-            console.log(`MultiplayerMenu: Button ${buttonKey} press ignored (still in show delay): ${now - this.showTime}ms since menu shown. Menu shown at: ${this.showTime}, Current time: ${now}, Delay period: ${this.showDelay}ms`);
-            return;
+        // Scale down the button slightly for press effect
+        buttonMesh.scale.set(0.95, 0.95, 0.95);
+        
+        // Change material color to "click" color
+        if (buttonMesh.material && this.buttonColors[buttonKey]) {
+            buttonMesh.material.color.setHex(this.buttonColors[buttonKey].click);
+            buttonMesh.material.emissive.setHex(this.buttonColors[buttonKey].click);
+            buttonMesh.material.emissiveIntensity = 0.4;
         }
         
-        if (now - this.lastButtonPressTime < this.buttonCooldown) {
-            console.log(`MultiplayerMenu: Button ${buttonKey} press ignored (cooldown active): ${now - this.lastButtonPressTime}ms since last press. Last press: ${this.lastButtonPressTime}, Current time: ${now}, Cooldown: ${this.buttonCooldown}ms`);
-            return;
-        }
-        console.log(`MultiplayerMenu: Button ${buttonKey} pressed successfully at ${now}`);
-        this.lastButtonPressTime = now;
+        // Reset button after a short delay
+        setTimeout(() => {
+            buttonMesh.scale.set(1, 1, 1);
+            if (buttonMesh.material && this.buttonColors[buttonKey]) {
+                buttonMesh.material.color.setHex(this.buttonColors[buttonKey].base);
+                buttonMesh.material.emissive.setHex(this.buttonColors[buttonKey].base);
+                buttonMesh.material.emissiveIntensity = 0.2;
+            }
+        }, 200);
         
-        const buttonMesh = this.buttons[buttonKey].children[0];
-        buttonMesh.material.color.setHex(buttonMesh.userData.clickColor);
-        buttonMesh.material.emissive.setHex(buttonMesh.userData.clickColor);
-        buttonMesh.material.emissiveIntensity = 0.3;
-        
-        // Apply enhanced click effect
-        this.buttons[buttonKey].position.z += 0.01;
-        this.buttons[buttonKey].scale.set(0.95, 0.95, 1.0);
-        
-        // Execute callback
-        console.log(`MultiplayerMenu: Executing callback for button: ${buttonKey}`);
+        // Execute button callback
         if (buttonKey === 'singleplayer' && this.callbacks.onSinglePlayer) {
             this.callbacks.onSinglePlayer();
         } else if (buttonKey === 'host' && this.callbacks.onHost) {
@@ -475,18 +570,11 @@ export class MultiplayerMenu {
             this.callbacks.onJoin();
         } else if (buttonKey === 'back' && this.callbacks.onBack) {
             this.callbacks.onBack();
+        } else if (buttonKey === 'webrtc' && this.callbacks.onWebRTC) {
+            this.callbacks.onWebRTC();
+            // Update button text after WebRTC state changes
+            setTimeout(() => this.updateWebRTCButtonText(), 300);
         }
-        
-        // Reset button state after 300ms (matching the transition duration)
-        console.log(`MultiplayerMenu: Setting timeout to reset button ${buttonKey} in 300ms`);
-        setTimeout(() => {
-            if (this.buttons[buttonKey]) {
-                this.buttons[buttonKey].position.z -= 0.01;
-                this.buttons[buttonKey].scale.set(1.0, 1.0, 1.0);
-                this.unhighlightButton(buttonKey);
-                console.log(`MultiplayerMenu: Button ${buttonKey} reset completed`);
-            }
-        }, 300);
     }
     
     setCallbacks(callbacks) {

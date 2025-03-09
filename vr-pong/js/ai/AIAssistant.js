@@ -532,6 +532,46 @@ export class AIAssistant {
         inputWrapper.appendChild(input);
         inputWrapper.appendChild(toggleBtn);
         
+        // Add paste button for easier API key entry
+        const pasteButton = document.createElement('button');
+        pasteButton.textContent = '📋 Paste API Key';
+        pasteButton.style.width = '100%';
+        pasteButton.style.padding = '8px 12px';
+        pasteButton.style.marginBottom = '15px';
+        pasteButton.style.backgroundColor = '#555';
+        pasteButton.style.border = 'none';
+        pasteButton.style.borderRadius = '4px';
+        pasteButton.style.color = 'white';
+        pasteButton.style.fontWeight = 'bold';
+        pasteButton.style.cursor = 'pointer';
+        pasteButton.style.fontSize = '14px';
+        pasteButton.style.display = 'flex';
+        pasteButton.style.alignItems = 'center';
+        pasteButton.style.justifyContent = 'center';
+        
+        // Add click handler for paste functionality
+        pasteButton.addEventListener('click', async () => {
+            try {
+                // Request clipboard read permission and paste text
+                const text = await navigator.clipboard.readText();
+                
+                // Check if the text looks like an API key
+                if (text.trim().startsWith('sk-')) {
+                    // Fill the input with the clipboard text
+                    input.value = text.trim();
+                    statusMsg.textContent = 'API key pasted successfully';
+                    statusMsg.style.color = '#4CAF50';
+                } else {
+                    statusMsg.textContent = 'Clipboard content does not appear to be an API key';
+                    statusMsg.style.color = '#ff5555';
+                }
+            } catch (error) {
+                console.error("Clipboard error:", error);
+                statusMsg.textContent = 'Could not access clipboard. Please paste manually.';
+                statusMsg.style.color = '#ff5555';
+            }
+        });
+        
         // Add submit button
         const submitBtn = document.createElement('button');
         submitBtn.textContent = 'Connect to OpenAI';
@@ -624,6 +664,7 @@ export class AIAssistant {
         this.setupContainer.appendChild(title);
         this.setupContainer.appendChild(description);
         this.setupContainer.appendChild(inputWrapper);
+        this.setupContainer.appendChild(pasteButton);
         this.setupContainer.appendChild(submitBtn);
         this.setupContainer.appendChild(clientSideOption);
         this.setupContainer.appendChild(statusMsg);
