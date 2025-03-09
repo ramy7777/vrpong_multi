@@ -87,7 +87,7 @@ export class Game {
             console.log('VR session started');
             this.vrMode = true;
         });
-        
+
         this.renderer.xr.addEventListener('sessionend', () => {
             console.log('VR session ended');
             this.vrMode = false;
@@ -134,7 +134,7 @@ export class Game {
     createControllers() {
         // Controller model factory
         const controllerModelFactory = new XRControllerModelFactory();
-        
+
         // Controller 1
         this.controller1 = this.renderer.xr.getController(0);
         this.controller1.name = 'controller-right';

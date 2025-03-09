@@ -17,6 +17,7 @@ import { FinalScoreDisplay } from '../ui/FinalScoreDisplay.js';
 import { HeadModel } from '../player/HeadModel.js';
 import { HandModel } from '../player/HandModel.js';
 import { MobileController } from '../controllers/MobileController.js';
+import { AIAssistant } from '../ai/AIAssistant.js';
 
 export class Game {
     constructor() {
@@ -87,6 +88,9 @@ export class Game {
         
         // Initialize multiplayer manager
         this.multiplayerManager = new MultiplayerManager(this);
+        
+        // Add AIAssistant
+        this.aiAssistant = null;
         
         // Initialize the game
         this.init();
@@ -520,6 +524,8 @@ export class Game {
     }
 
     createGameElements() {
+        console.log("Game: Creating game elements");
+        // Direct implementation rather than calling methods that may not exist
         this.environment = new GameEnvironment(this.scene);
         // Initialize sound manager
         this.soundManager = new SoundManager();
@@ -612,6 +618,12 @@ export class Game {
 
         // Create remote controller visualizations for multiplayer
         this.createRemoteControllerVisuals();
+        
+        // Only create AI Assistant in single-player mode
+        if (!this.multiplayerManager.isInMultiplayerGame()) {
+            console.log("Game: Creating AI Assistant for single-player mode");
+            this.createAIAssistant();
+        }
     }
 
     createMessageDisplay() {
@@ -794,6 +806,12 @@ export class Game {
                     inputSource.gamepad.hapticActuators[0].pulse(1.0, 100);
                 }
             }
+        }
+
+        // If we have an AI Assistant, clean it up when switching to multiplayer
+        if (this.aiAssistant) {
+            this.aiAssistant.cleanup();
+            this.aiAssistant = null;
         }
     }
 
@@ -1682,6 +1700,21 @@ export class Game {
         this.emit('gameStarted');
     }
 
+    // Create AI Assistant for single-player mode
+    createAIAssistant() {
+        console.log("Game: createAIAssistant method called");
+        
+        try {
+            console.log("Game: Initializing AI Assistant for single-player mode");
+            this.aiAssistant = new AIAssistant(this);
+            console.log("Game: AI Assistant created successfully");
+            return true;
+        } catch (error) {
+            console.error("Game: Error creating AI Assistant:", error);
+            return false;
+        }
+    }
+
     // Event emitter methods
     addEventListener(event, callback) {
         if (!this.eventListeners[event]) {
@@ -1706,5 +1739,50 @@ export class Game {
     detectAndSetupMobileControls() {
         // Initialize mobile controller
         this.mobileController = new MobileController(this);
+    }
+
+    // Add a proper cleanup method to handle all cleanup tasks
+    cleanup() {
+        console.log("Cleaning up game resources");
+        
+        // Stop animation loop (if we have direct access to it)
+        if (this.renderer) {
+            this.renderer.setAnimationLoop(null);
+        }
+        
+        // Clean up AI assistant
+        if (this.aiAssistant) {
+            this.aiAssistant.cleanup();
+            this.aiAssistant = null;
+        }
+        
+        // Clean up voice chat via multiplayer manager
+        if (this.multiplayerManager) {
+            this.multiplayerManager.cleanup();
+            this.multiplayerManager = null;
+        }
+        
+        // Remove event listeners
+        window.removeEventListener('resize', this.onWindowResize);
+        window.removeEventListener('keydown', this.onKeyDown);
+        window.removeEventListener('keyup', this.onKeyUp);
+        window.removeEventListener('mousemove', this.onMouseMove);
+        
+        // Dispose of Three.js objects
+        if (this.scene) {
+            // This is a simple dispose - in a more complex app, you'd want to traverse 
+            // the scene and properly dispose of all geometries, materials, textures, etc.
+            this.scene = null;
+        }
+        
+        if (this.renderer) {
+            this.renderer.dispose();
+            this.renderer = null;
+        }
+        
+        // Clear event listeners
+        this.eventListeners = {};
+        
+        console.log("Game cleanup complete");
     }
 }

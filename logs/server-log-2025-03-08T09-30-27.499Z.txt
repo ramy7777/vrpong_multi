@@ -1,0 +1,11 @@
+[2025-03-08T09:30:27.503Z] Starting server from: C:\Users\ramih\CascadeProjects\vr-pong-Multi\vr-pong\server.js
+[2025-03-08T09:30:27.510Z] Server process started with PID: 50380
+[2025-03-08T09:30:27.759Z] SERVER OUT: Secure server running at https://localhost:8443
+[2025-03-08T09:30:27.760Z] SERVER OUT: Access from Quest: https://[your-local-ip]:8443
+Note: You will need to accept the self-signed certificate warning in your browser
+To see the certificate warning:
+1. Open https://localhost:8443 in your browser
+2. You should see a warning about the certificate
+3. Click "Advanced" and then "Proceed to localhost (unsafe)"
+4. Once accepted in your browser, it should work in the Quest browser as well
+[2025-03-08T09:30:37.520Z] Initial logging complete, server will continue running in background

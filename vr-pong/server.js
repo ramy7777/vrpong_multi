@@ -3,6 +3,25 @@ const https = require('https');
 const path = require('path');
 const selfsigned = require('selfsigned');
 const socketIo = require('socket.io');
+const OpenAI = require('openai');
+
+// Initialize variables for OpenAI
+let openaiClient = null;
+let openaiApiKey = process.argv[2]; // Get API key from command line
+
+// Try to initialize OpenAI with the API key if available
+if (openaiApiKey) {
+    try {
+        openaiClient = new OpenAI({
+            apiKey: openaiApiKey
+        });
+        console.log("OpenAI client initialized successfully with provided API key");
+    } catch (error) {
+        console.error("Error initializing OpenAI client:", error);
+    }
+} else {
+    console.log("No OpenAI API key found. AI features will be disabled.");
+}
 
 // Game rooms storage
 const gameRooms = {};
@@ -420,6 +439,105 @@ io.on('connection', (socket) => {
                 console.log(`Game room ${roomId} removed due to player disconnect`);
                 break;
             }
+        }
+    });
+    
+    // Handle OpenAI chat requests
+    socket.on('openai-chat', async (data) => {
+        console.log(`Received chat request from ${socket.id}: ${data.message}`);
+        
+        if (!openaiClient) {
+            console.log(`No OpenAI client available for ${socket.id}, notifying client`);
+            socket.emit('openai-error', { error: 'OpenAI not initialized. Please provide an API key.' });
+            return;
+        }
+        
+        try {
+            console.log(`Processing OpenAI request for ${socket.id}`);
+            const completion = await openaiClient.chat.completions.create({
+                messages: [
+                    { role: "system", content: "You are an AI assistant for a VR Pong game. Be concise, helpful, and friendly. Provide tips and guidance for playing the game." },
+                    { role: "user", content: data.message }
+                ],
+                model: "gpt-3.5-turbo",
+            });
+            
+            const response = completion.choices[0].message.content;
+            console.log(`Sending response to ${socket.id}: ${response.substring(0, 50)}...`);
+            socket.emit('openai-response', { response });
+        } catch (error) {
+            console.error(`OpenAI API error for ${socket.id}:`, error);
+            
+            let errorMessage = "An error occurred while processing your request.";
+            if (error.message) {
+                errorMessage = error.message;
+                
+                // Check for common API key issues
+                if (error.message.includes("API key")) {
+                    errorMessage = "Invalid API key. Please provide a valid OpenAI API key.";
+                } else if (error.message.includes("rate limit")) {
+                    errorMessage = "Rate limit exceeded. Please try again in a moment.";
+                }
+            }
+            
+            socket.emit('openai-error', { error: errorMessage });
+        }
+    });
+    
+    // Handle setting the OpenAI API key from the browser
+    socket.on('set-openai-key', (data) => {
+        const { key } = data;
+        if (!key) {
+            socket.emit('openai-key-status', { 
+                success: false, 
+                error: 'No API key provided' 
+            });
+            return;
+        }
+        
+        // Basic validation to ensure it's an OpenAI API key
+        if (!key.trim().startsWith('sk-')) {
+            socket.emit('openai-key-status', { 
+                success: false, 
+                error: 'Invalid API key format. OpenAI API keys should start with "sk-"' 
+            });
+            return;
+        }
+        
+        try {
+            // Initialize OpenAI with the provided key
+            console.log(`Attempting to initialize OpenAI client with key from user ${socket.id}`);
+            
+            // Clean the key of any non-standard characters
+            const cleanKey = key.trim();
+            
+            openaiClient = new OpenAI({
+                apiKey: cleanKey
+            });
+            
+            // Store the key for future use
+            openaiApiKey = cleanKey;
+            
+            console.log(`Valid OpenAI API key set for user ${socket.id}`);
+            socket.emit('openai-key-status', { success: true });
+            
+            // Test the API key with a simple completion to verify it works
+            openaiClient.chat.completions.create({
+                messages: [{ role: "system", content: "You are a helpful assistant." }],
+                model: "gpt-3.5-turbo",
+                max_tokens: 5
+            }).then(() => {
+                console.log(`API key for ${socket.id} verified successfully`);
+            }).catch(error => {
+                console.error(`API key verification failed for ${socket.id}:`, error);
+                // We don't need to notify the client here as the key was already accepted
+            });
+        } catch (error) {
+            console.error(`Error initializing OpenAI with key from user ${socket.id}:`, error);
+            socket.emit('openai-key-status', { 
+                success: false, 
+                error: error.message || 'Failed to initialize OpenAI client' 
+            });
         }
     });
 });
