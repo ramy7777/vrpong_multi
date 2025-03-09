@@ -941,209 +941,201 @@ export class AIAssistant {
     
     // Text-to-speech for assistant responses
     speakText(text) {
-        if ('speechSynthesis' in window) {
-            try {
-                // Force cancel any previous speech that might be stuck
-                window.speechSynthesis.cancel();
-                
-                this.isSpeaking = true;
-                this.lastSpeechTimestamp = Date.now();
-                console.log("AI Assistant: Starting speech synthesis, isSpeaking =", this.isSpeaking);
-                
-                // If the text is empty or undefined, just return
-                if (!text || text.trim() === '') {
-                    console.warn("AI Assistant: Empty text provided for speech synthesis");
-                    this.isSpeaking = false;
-                    return;
-                }
-                
-                const utterance = new SpeechSynthesisUtterance(text);
-                
-                // Configure voice parameters
-                utterance.rate = 1.0;
-                utterance.pitch = 1.0;
-                utterance.volume = 1.0;
-                
-                // Get the voices and handle the case where they might not be loaded yet
-                let voices = window.speechSynthesis.getVoices();
-                
-                // Log how many voices are available for debugging
-                console.log("AI Assistant: Available voices:", voices.length);
-                
-                // In some browsers, voices might be loaded asynchronously
-                if (voices.length === 0) {
-                    console.log("AI Assistant: No voices available yet, will try again when voices load");
+        if (!text || text.trim() === '') {
+            console.log("AI Assistant: Empty text provided to speakText, ignoring");
+            return;
+        }
+
+        // Don't start a new speech if one is already in progress
+        if (this.isSpeaking && this.lastSpeechTimestamp && (Date.now() - this.lastSpeechTimestamp < 1000)) {
+            console.log("AI Assistant: Speech already in progress, ignoring new request");
+            return;
+        }
+
+        console.log("AI Assistant: Starting speech synthesis, isSpeaking = true");
+        this.isSpeaking = true;
+        this.lastSpeechTimestamp = Date.now();
+
+        // Cancel any previous speech
+        window.speechSynthesis.cancel();
+
+        try {
+            // Get available voices
+            const voices = window.speechSynthesis.getVoices();
+            console.log(`AI Assistant: Available voices: ${voices.length}`);
+
+            if (voices.length === 0) {
+                // If voices are not available yet, wait for them to load
+                console.log("AI Assistant: No voices available, waiting for voices to load");
+                window.speechSynthesis.onvoiceschanged = () => {
+                    const voices = window.speechSynthesis.getVoices();
+                    console.log(`AI Assistant: Voices loaded, now available: ${voices.length}`);
                     
-                    // Set up a one-time event listener for when voices are loaded
-                    window.speechSynthesis.onvoiceschanged = () => {
-                        console.log("AI Assistant: Voices are now available");
-                        voices = window.speechSynthesis.getVoices();
-                        
-                        // Check if we actually got voices this time
-                        if (voices.length === 0) {
-                            console.warn("AI Assistant: Still no voices available after voices changed event");
-                            this.isSpeaking = false;
-                            return;
-                        }
-                        
-                        this.setVoiceAndSpeak(utterance, voices, text);
-                    };
-                    
-                    // Add a fallback timeout in case the voices never load
-                    setTimeout(() => {
-                        if (this.isSpeaking && (!voices || voices.length === 0)) {
-                            console.warn("AI Assistant: Voices never loaded, using default voice");
-                            // Just try to speak with default voice
-                            window.speechSynthesis.speak(utterance);
-                        }
-                    }, 3000);
-                } else {
-                    this.setVoiceAndSpeak(utterance, voices, text);
-                }
-                
-                // Add a safety timeout in case onend doesn't fire
-                setTimeout(() => {
-                    if (this.isSpeaking) {
-                        console.log("AI Assistant: Speech timeout safety triggered");
-                        this.isSpeaking = false;
-                        this.lastSpeechTimestamp = null;
-                        
-                        // Try to restart speech synthesis if it's stuck
-                        window.speechSynthesis.cancel();
+                    if (voices.length > 0) {
+                        window.speechSynthesis.onvoiceschanged = null; // Remove the event handler
+                        this.speakTextInChunks(text, voices);
                     }
-                }, 15000); // 15 seconds max speech time
-            } catch (error) {
-                console.error('Error with speech synthesis:', error);
-                this.isSpeaking = false;
-                this.lastSpeechTimestamp = null;
-                
-                // Show message to user
-                this.showMessage("Voice output failed. Check if your device supports speech synthesis.");
+                };
+
+                // Add a fallback timeout in case the voices never load
+                setTimeout(() => {
+                    if (this.isSpeaking && (!voices || voices.length === 0)) {
+                        console.warn("AI Assistant: Voices never loaded, using default voice");
+                        // Just try to speak with default voice
+                        this.speakTextInChunks(text, []);
+                    }
+                }, 3000);
+            } else {
+                this.speakTextInChunks(text, voices);
             }
-        } else {
-            console.warn("AI Assistant: Speech synthesis not supported in this browser");
-            this.showMessage("Voice output not supported in your browser.");
+        } catch (error) {
+            console.error('Error with speech synthesis:', error);
+            this.isSpeaking = false;
+            this.lastSpeechTimestamp = null;
+            
+            // Show message to user
+            this.showMessage("Speech synthesis failed. Please try again.");
         }
     }
-    
-    // Helper method to set voice and start speaking
-    setVoiceAndSpeak(utterance, voices, text) {
-        // Log all available voices to help with debugging
+
+    // New method to speak text in chunks
+    speakTextInChunks(text, voices) {
+        // Split text into sentences and then into manageable chunks
+        const sentenceBreakers = ['.', '!', '?', ':', ';', '\n'];
+        let sentences = [];
+        let currentSentence = '';
+        
+        // Split by sentence to maintain natural pauses
+        for (let i = 0; i < text.length; i++) {
+            currentSentence += text[i];
+            
+            if (sentenceBreakers.includes(text[i]) && 
+                (i + 1 === text.length || text[i+1] === ' ' || text[i+1] === '\n')) {
+                sentences.push(currentSentence);
+                currentSentence = '';
+            }
+        }
+        
+        // Add any remaining text
+        if (currentSentence) {
+            sentences.push(currentSentence);
+        }
+        
+        // Group sentences into chunks (100-150 characters is a good size)
+        const maxChunkLength = 150;
+        let chunks = [];
+        let currentChunk = '';
+        
+        for (let sentence of sentences) {
+            // If adding this sentence would make the chunk too long, start a new chunk
+            if (currentChunk.length + sentence.length > maxChunkLength && currentChunk.length > 0) {
+                chunks.push(currentChunk);
+                currentChunk = sentence;
+            } else {
+                currentChunk += sentence;
+            }
+        }
+        
+        // Add the final chunk
+        if (currentChunk) {
+            chunks.push(currentChunk);
+        }
+        
+        console.log(`AI Assistant: Split text into ${chunks.length} chunks for speaking`);
+        
+        // Speak each chunk sequentially
+        this.speakChunks(chunks, 0, voices);
+    }
+
+    // Helper method to speak chunks one after another
+    speakChunks(chunks, index, voices) {
+        if (index >= chunks.length) {
+            console.log("AI Assistant: Finished speaking all chunks");
+            this.isSpeaking = false;
+            this.lastSpeechTimestamp = null;
+            return;
+        }
+        
+        const chunk = chunks[index];
+        console.log(`AI Assistant: Speaking chunk ${index+1}/${chunks.length}: ${chunk.substring(0, 30)}...`);
+        
+        const utterance = new SpeechSynthesisUtterance(chunk);
+        
+        // Set voice
+        if (voices && voices.length > 0) {
+            this.setVoiceForUtterance(utterance, voices);
+        }
+        
+        // Events
+        utterance.onend = () => {
+            console.log(`AI Assistant: Chunk ${index+1} finished speaking`);
+            // Speak next chunk after a slight pause
+            setTimeout(() => {
+                this.speakChunks(chunks, index + 1, voices);
+            }, 100);
+        };
+        
+        utterance.onerror = (event) => {
+            console.log(`AI Assistant: Error speaking chunk ${index+1}: ${event.error}`);
+            // Try to continue with next chunk anyway
+            setTimeout(() => {
+                this.speakChunks(chunks, index + 1, voices);
+            }, 100);
+        };
+        
+        // Speak this chunk
+        window.speechSynthesis.speak(utterance);
+    }
+
+    // Helper method to set voice for utterance
+    setVoiceForUtterance(utterance, voices) {
+        // Log all voices for debugging
         voices.forEach((voice, i) => {
-            console.log(`Voice ${i}: ${voice.name} (${voice.lang})`);
+            console.log(`Voice ${i}: ${voice.name} - ${voice.lang} (${voice.voiceURI})`);
         });
         
-        // Try to find a good voice with a prioritized approach
-        // First priority: Google UK English Female or other high-quality natural voices
+        // Try to find Google UK Female voice first (best quality)
         let selectedVoice = voices.find(voice => 
-            voice.name.includes('Google UK English Female')
+            voice.name === 'Google UK English Female'
         );
         
-        // Second priority: Other high-quality Google voices
+        // If not found, try other Google voices
         if (!selectedVoice) {
             selectedVoice = voices.find(voice => 
-                voice.name.includes('Google US English') ||
-                voice.name.includes('Google UK English Male')
+                voice.name === 'Google US English' || 
+                voice.name === 'Google UK English Male'
             );
         }
         
-        // Third priority: Any female English voice
+        // If still not found, try any female English voice
         if (!selectedVoice) {
             selectedVoice = voices.find(voice => 
-                (voice.name.includes('Female') || voice.name.includes('female')) &&
-                (voice.lang.includes('en') || voice.lang.includes('EN'))
+                voice.lang.includes('en') && 
+                (voice.name.includes('Female') || voice.name.includes('Zira'))
             );
         }
         
-        // Fourth priority: Any English voice
+        // If still not found, try any English voice
         if (!selectedVoice) {
-            selectedVoice = voices.find(voice => 
-                voice.lang.includes('en') || voice.lang.includes('EN')
-            );
+            selectedVoice = voices.find(voice => voice.lang.includes('en'));
         }
         
-        // Last resort: first available voice
+        // If all else fails, use the first voice
         if (!selectedVoice && voices.length > 0) {
             selectedVoice = voices[0];
         }
         
         if (selectedVoice) {
-            console.log("AI Assistant: Selected voice:", selectedVoice.name);
+            console.log(`AI Assistant: Selected voice: ${selectedVoice.name}`);
             utterance.voice = selectedVoice;
         } else {
             console.warn("AI Assistant: No suitable voice found");
         }
         
-        // Handle speak events
-        utterance.onstart = () => {
-            console.log("AI Assistant: Speech started");
-            // Some browsers need to be reminded they're speaking
-            this.lastSpeechTimestamp = Date.now();
-        };
-        
-        utterance.onend = () => {
-            console.log("AI Assistant: Speech synthesis completed");
-            this.isSpeaking = false;
-            this.lastSpeechTimestamp = null;
-            
-            // Clear any timers
-            if (this.speechCheckTimer) {
-                clearTimeout(this.speechCheckTimer);
-                this.speechCheckTimer = null;
-            }
-        };
-        
-        utterance.onerror = (event) => {
-            console.error("AI Assistant: Speech synthesis error:", event);
-            this.isSpeaking = false;
-            this.lastSpeechTimestamp = null;
-            
-            // Clear any timers
-            if (this.speechCheckTimer) {
-                clearTimeout(this.speechCheckTimer);
-                this.speechCheckTimer = null;
-            }
-        };
-        
-        // Some browsers need a user interaction to enable audio
-        // We'll try to resume the audio context if available
-        if (window.audioContext) {
-            if (window.audioContext.state === 'suspended') {
-                window.audioContext.resume().then(() => {
-                    console.log("AI Assistant: Audio context resumed");
-                }).catch(err => {
-                    console.error("AI Assistant: Failed to resume audio context:", err);
-                });
-            }
-        }
-        
-        // Browser-specific handling
-        const isChrome = navigator.userAgent.indexOf("Chrome") > -1;
-        const isSafari = navigator.userAgent.indexOf("Safari") > -1 && navigator.userAgent.indexOf("Chrome") === -1;
-        
-        if (isChrome) {
-            // Chrome has issues with long texts and sometimes needs a nudge
-            this.ensureSpeechCompletes(text, utterance.text.length * 50); // Rough estimate: 50ms per character
-        }
-        
-        // Start speaking
-        try {
-            window.speechSynthesis.speak(utterance);
-        } catch (e) {
-            console.error("AI Assistant: Error during speech synthesis:", e);
-            this.isSpeaking = false;
-            
-            // Try one more time with a delay
-            setTimeout(() => {
-                try {
-                    window.speechSynthesis.cancel(); // Clear any stuck utterances
-                    window.speechSynthesis.speak(utterance);
-                } catch (e2) {
-                    console.error("AI Assistant: Second speech synthesis attempt failed:", e2);
-                    this.isSpeaking = false;
-                }
-            }, 100);
-        }
+        // Set other properties for better quality
+        utterance.rate = 1.0;  // Normal speed
+        utterance.pitch = 1.0; // Normal pitch
+        utterance.volume = 1.0; // Full volume
     }
     
     // Show or hide UI components
@@ -1316,52 +1308,6 @@ export class AIAssistant {
         this.chatHistory = [];
         
         console.log("AI Assistant: Cleanup complete");
-    }
-    
-    // Helper method to ensure speech synthesis completes on buggy browsers
-    ensureSpeechCompletes(text, estimatedDuration) {
-        // Some browsers (especially Chrome) have a bug where speech synthesis
-        // stops after about 15 seconds or when the browser does other tasks
-        // This method implements a workaround by breaking speech into chunks
-        
-        const minDuration = 5000; // Minimum duration for the workaround to activate
-        
-        if (estimatedDuration < minDuration) {
-            // For short texts, we don't need the workaround
-            return;
-        }
-        
-        // Clear any existing timer
-        if (this.speechCheckTimer) {
-            clearTimeout(this.speechCheckTimer);
-        }
-        
-        // Set a timer to check if speech is still in progress
-        this.speechCheckTimer = setTimeout(() => {
-            if (this.isSpeaking) {
-                console.log("AI Assistant: Checking if speech synthesis is still active");
-                
-                // Chrome's speech synthesis can get stuck, so we need to nudge it
-                if (window.speechSynthesis.speaking) {
-                    console.log("AI Assistant: Speech synthesis is still active, nudging it to continue");
-                    // This weird pause/resume pattern keeps Chrome's speech synthesis working
-                    window.speechSynthesis.pause();
-                    setTimeout(() => {
-                        window.speechSynthesis.resume();
-                    }, 10);
-                } else if (this.isSpeaking) {
-                    console.log("AI Assistant: Speech synthesis stopped prematurely, resetting state");
-                    this.isSpeaking = false;
-                }
-            }
-            
-            // Set up another check if speech is still ongoing
-            if (this.isSpeaking) {
-                setTimeout(() => {
-                    this.ensureSpeechCompletes(text, estimatedDuration);
-                }, 5000); // Check every 5 seconds
-            }
-        }, 5000); // First check after 5 seconds
     }
     
     // Initialize audio context for browsers that need it before audio will work
