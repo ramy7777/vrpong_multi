@@ -8,6 +8,9 @@ const OpenAI = require('openai');
 const fs = require('fs');
 const { Readable } = require('stream');
 const os = require('os');
+const fetch = require('node-fetch'); // For making direct API calls
+const { Blob } = require('buffer'); // For creating Blobs from buffers
+const FormData = require('form-data'); // For creating multipart form data
 
 // Initialize variables for OpenAI
 let openaiClient = null;
@@ -470,7 +473,7 @@ io.on('connection', (socket) => {
             // Initialize chat history if it doesn't exist
             if (!userChatHistories[socket.id]) {
                 userChatHistories[socket.id] = [
-                    { role: "system", content: "You are a friendly and helpful AI assistant in a VR Pong game environment. While you can provide tips and guidance about the game, you're also capable of having general conversations on a wide range of topics. Be engaging, informative, and personable." }
+                    { role: "system", content: "You are GPT-4o mini, a helpful assistant in a VR Pong game environment. While you can provide tips and guidance about the game, you're also capable of having general conversations on a wide range of topics. Be engaging, informative, and personable. ALWAYS identify yourself as GPT-4o mini when asked about your model or capabilities." }
                 ];
             }
             
@@ -488,15 +491,17 @@ io.on('connection', (socket) => {
             const completion = await openaiClient.chat.completions.create({
                 messages: userChatHistories[socket.id],
                 model: "gpt-4o-mini",
+                temperature: 0.7
             });
             
             const response = completion.choices[0].message.content;
+            const modelUsed = completion.model || "gpt-4o-mini";
             
             // Add assistant response to history
             userChatHistories[socket.id].push({ role: "assistant", content: response });
             
-            console.log(`Sending response to ${socket.id}: ${response.substring(0, 50)}...`);
-            socket.emit('openai-response', { response });
+            console.log(`Sending response from ${modelUsed} to ${socket.id}: ${response.substring(0, 50)}...`);
+            socket.emit('openai-response', { response, model: modelUsed });
         } catch (error) {
             console.error(`OpenAI API error for ${socket.id}:`, error);
             
@@ -574,8 +579,8 @@ io.on('connection', (socket) => {
     });
 
     // Handle OpenAI realtime audio chat
-    socket.on('openai-audio-chat', async (data) => {
-        console.log(`Received audio chat request from ${socket.id}`);
+    socket.on('openai-audio-stream', async (data) => {
+        console.log(`Received audio stream request from ${socket.id}`);
         
         if (!openaiClient) {
             console.log(`No OpenAI client available for ${socket.id}, notifying client`);
@@ -586,139 +591,32 @@ io.on('connection', (socket) => {
         try {
             // Create a temporary file with the audio data
             const tempDir = os.tmpdir();
-            const tempFilePath = path.join(tempDir, `audio-${socket.id}-${Date.now()}.webm`);
+            const tempFilePath = path.join(tempDir, `audio-stream-${socket.id}-${Date.now()}.webm`);
             
             // Write base64 audio to file
-            const audioBuffer = base64ToBuffer(data.audio);
-            fs.writeFileSync(tempFilePath, audioBuffer);
-            
-            console.log(`Created temporary audio file at ${tempFilePath} for ${socket.id}`);
+            let audioBuffer;
+            try {
+                audioBuffer = base64ToBuffer(data);
+                if (audioBuffer.length === 0) {
+                    throw new Error("Empty or invalid audio data received");
+                }
+                fs.writeFileSync(tempFilePath, audioBuffer);
+                console.log(`Created temporary audio file at ${tempFilePath} for realtime audio streaming (${audioBuffer.length} bytes)`);
+            } catch (bufferError) {
+                console.error(`Error processing audio data for ${socket.id}:`, bufferError);
+                socket.emit('openai-error', { error: 'Invalid audio format received. Please try again.' });
+                return;
+            }
             
             // Initialize chat history if it doesn't exist
             if (!userChatHistories[socket.id]) {
                 userChatHistories[socket.id] = [
-                    { role: "system", content: "You are a friendly and helpful AI assistant in a VR Pong game environment. While you can provide tips and guidance about the game, you're also capable of having general conversations on a wide range of topics. Be engaging, informative, and personable." }
+                    { role: "system", content: "You are a friendly and helpful AI assistant in a VR Pong game environment. While you can provide tips and guidance about the game, you're also capable of having general conversations on a wide range of topics. Be engaging, informative, and personable. Keep responses concise but helpful." }
                 ];
             }
             
-            console.log(`Processing audio with OpenAI API for ${socket.id}`);
-            
-            // Step 1: Transcribe the audio using the file path
-            const transcriptionResponse = await openaiClient.audio.transcriptions.create({
-                file: fs.createReadStream(tempFilePath),
-                model: "whisper-1",
-            });
-            
-            const transcription = transcriptionResponse.text;
-            console.log(`Transcription for ${socket.id}: ${transcription}`);
-            
-            // Clean up the temporary file
+            // Using transcription + GPT-4o mini + TTS approach since Audio Conversations API isn't fully available
             try {
-                fs.unlinkSync(tempFilePath);
-                console.log(`Deleted temporary file ${tempFilePath}`);
-            } catch (cleanupError) {
-                console.error(`Error deleting temporary file ${tempFilePath}:`, cleanupError);
-            }
-            
-            // If the transcription is empty, send an error
-            if (!transcription || transcription.trim() === '') {
-                socket.emit('openai-error', { error: 'Could not transcribe audio. Please try again.' });
-                return;
-            }
-            
-            // Add user message to history
-            userChatHistories[socket.id].push({ role: "user", content: transcription });
-            
-            // Limit history to last 10 messages to prevent context overflow
-            if (userChatHistories[socket.id].length > 11) { // 1 system + 10 messages
-                userChatHistories[socket.id] = [
-                    userChatHistories[socket.id][0], // Keep system message
-                    ...userChatHistories[socket.id].slice(-10) // Keep last 10 messages
-                ];
-            }
-            
-            // Send the transcription to the client immediately
-            socket.emit('openai-transcription', { transcription });
-            
-            // Step 2: Generate a streaming response using GPT-4o mini's streaming capability
-            let fullResponse = ''; // Variable to collect the full response
-            
-            const completion = await openaiClient.chat.completions.create({
-                messages: userChatHistories[socket.id],
-                model: "gpt-4o-mini",
-                stream: true, // Enable streaming
-            });
-            
-            // Set up streaming response
-            for await (const chunk of completion) {
-                if (chunk.choices[0]?.delta?.content) {
-                    const contentChunk = chunk.choices[0].delta.content;
-                    fullResponse += contentChunk;
-                    
-                    // Send each chunk to the client for real-time display
-                    socket.emit('openai-stream-chunk', { text: contentChunk });
-                }
-            }
-            
-            // Add assistant response to history
-            userChatHistories[socket.id].push({ role: "assistant", content: fullResponse });
-            
-            console.log(`Generated full text response for ${socket.id}: ${fullResponse.substring(0, 50)}...`);
-            
-            // Step 3: Convert the text response to speech using OpenAI's TTS
-            const audioResponse = await openaiClient.audio.speech.create({
-                model: "tts-1-hd",  // Upgraded to the high-definition TTS model
-                voice: "nova",      // Using nova, which is more natural and conversational
-                input: fullResponse,
-            });
-            
-            // Get audio as binary data and convert to base64
-            const speechBuffer = Buffer.from(await audioResponse.arrayBuffer());
-            const audioBase64 = `data:audio/mp3;base64,${speechBuffer.toString('base64')}`;
-            
-            // Send the audio response to the client
-            socket.emit('openai-speech-response', { audio: audioBase64 });
-            
-        } catch (error) {
-            console.error(`OpenAI API error for ${socket.id}:`, error);
-            
-            let errorMessage = "An error occurred while processing your audio request.";
-            if (error.message) {
-                errorMessage = error.message;
-                
-                // Check for common API key issues
-                if (error.message.includes("API key")) {
-                    errorMessage = "Invalid API key. Please provide a valid OpenAI API key.";
-                } else if (error.message.includes("rate limit")) {
-                    errorMessage = "Rate limit exceeded. Please try again in a moment.";
-                }
-            }
-            
-            socket.emit('openai-error', { error: errorMessage });
-        }
-    });
-
-    // Handle OpenAI audio streaming
-    socket.on('openai-audio-stream', async (audioBase64) => {
-        try {
-            // Check if OpenAI client is initialized
-            if (!openaiClient) {
-                socket.emit('openai-error', 'OpenAI client not initialized');
-                return;
-            }
-
-            // Create a temporary file for the audio data
-            const tempFilePath = path.join(os.tmpdir(), `audio-stream-${socket.id}-${Date.now()}.webm`);
-            const audioData = base64ToBuffer(audioBase64);
-            fs.writeFileSync(tempFilePath, audioData);
-            
-            console.log(`Created temporary audio file at ${tempFilePath} for realtime audio streaming`);
-            
-            // Check if we have access to the audio API and it's properly set up
-            if (!openaiClient.audio || !openaiClient.audio.speech || !openaiClient.audio.transcriptions) {
-                console.log("OpenAI Audio API not available. Falling back to transcription and completion.");
-                
-                // Fallback to our existing transcription and completion flow
                 // First transcribe the audio
                 const transcriptionResponse = await openaiClient.audio.transcriptions.create({
                     file: fs.createReadStream(tempFilePath),
@@ -728,121 +626,84 @@ io.on('connection', (socket) => {
                 const transcript = transcriptionResponse.text;
                 console.log(`Transcription for ${socket.id}: ${transcript}`);
                 
-                // Then generate a text response
+                // Send transcription immediately to client for feedback
+                socket.emit('openai-transcription', transcript);
+                
+                // Generate response with GPT-4o mini (not GPT-3.5)
+                const messages = [
+                    { role: "system", content: "You are GPT-4o mini, a helpful assistant in a VR Pong game. Keep responses concise but informative. ALWAYS identify yourself as GPT-4o mini when asked about your model or capabilities." },
+                    ...userChatHistories[socket.id].slice(-4), // Include a few recent messages for context
+                    { role: "user", content: transcript }
+                ];
+                
                 const completion = await openaiClient.chat.completions.create({
                     model: "gpt-4o-mini",
-                    messages: [
-                        {role: "system", content: "You are a helpful assistant in a VR Pong game."},
-                        {role: "user", content: transcript}
-                    ]
+                    temperature: 0.7,
+                    messages: messages
                 });
                 
                 const responseText = completion.choices[0].message.content;
-                console.log(`Generated text response for ${socket.id}: ${responseText.substring(0, 50)}...`);
+                const modelUsed = completion.model || "gpt-4o-mini";
                 
-                // Then convert to speech
+                console.log(`Generated text response with ${modelUsed} for ${socket.id}: ${responseText.substring(0, 50)}...`);
+                
+                // Store the conversation
+                userChatHistories[socket.id].push({ role: "user", content: transcript });
+                userChatHistories[socket.id].push({ role: "assistant", content: responseText });
+                
+                // Limit history to keep it manageable
+                if (userChatHistories[socket.id].length > 10) {
+                    userChatHistories[socket.id] = [
+                        userChatHistories[socket.id][0], // Keep system message
+                        ...userChatHistories[socket.id].slice(-9) // Keep last 9 exchanges
+                    ];
+                }
+                
+                // Convert to speech with enhanced TTS model
                 const mp3 = await openaiClient.audio.speech.create({
                     model: "tts-1-hd",
                     voice: "nova",
-                    input: responseText
+                    input: responseText,
+                    speed: 1.1
                 });
                 
                 // Convert to base64
                 const buffer = Buffer.from(await mp3.arrayBuffer());
                 const base64Audio = buffer.toString('base64');
                 
-                // Send both text and audio back to the client
-                socket.emit('openai-transcription', transcript);
+                // Send complete response to the client
                 socket.emit('openai-audio-stream-response', {
                     audioData: base64Audio,
-                    text: responseText
+                    text: responseText,
+                    model: modelUsed
                 });
-            } else {
-                // Try the audio.conversations API if it exists (newer OpenAI API versions)
+                
+                // Clean up the temporary file
                 try {
-                    if (openaiClient.audio.conversations && typeof openaiClient.audio.conversations.create === 'function') {
-                        // This is the preferred path for newer OpenAI SDK versions
-                        const audioStream = fs.createReadStream(tempFilePath);
-                        
-                        const response = await openaiClient.audio.conversations.create({
-                            model: "gpt-4o-mini",
-                            messages: [
-                                {
-                                    role: "user",
-                                    file_data: [
-                                        {
-                                            type: "audio",
-                                            audio: audioStream
-                                        }
-                                    ]
-                                }
-                            ]
-                        });
-                        
-                        // Process the response and send it back to the client
-                        const buffer = Buffer.from(await response.arrayBuffer());
-                        const base64Audio = buffer.toString('base64');
-                        
-                        socket.emit('openai-audio-stream-response', {
-                            audioData: base64Audio,
-                            text: "I've processed your audio input."
-                        });
-                    } else {
-                        throw new Error("Audio conversations API not available");
+                    fs.unlinkSync(tempFilePath);
+                    console.log(`Deleted temporary file ${tempFilePath}`);
+                } catch (cleanupError) {
+                    console.error(`Error deleting temporary file ${tempFilePath}:`, cleanupError);
+                }
+                
+            } catch (apiError) {
+                console.error(`Error in OpenAI API processing for ${socket.id}:`, apiError);
+                socket.emit('openai-error', { error: apiError.message || 'An error occurred while processing audio' });
+                
+                // Attempt to clean up even if processing failed
+                try {
+                    if (fs.existsSync(tempFilePath)) {
+                        fs.unlinkSync(tempFilePath);
+                        console.log(`Deleted temporary file ${tempFilePath} after error`);
                     }
-                } catch (conversionError) {
-                    console.log(`OpenAI Audio Conversation API not available or error: ${conversionError.message}`);
-                    console.log("Falling back to transcription + speech synthesis flow");
-                    
-                    // Fallback to our existing transcription and completion flow (same as above)
-                    const transcriptionResponse = await openaiClient.audio.transcriptions.create({
-                        file: fs.createReadStream(tempFilePath),
-                        model: "whisper-1"
-                    });
-                    
-                    const transcript = transcriptionResponse.text;
-                    console.log(`Transcription for ${socket.id}: ${transcript}`);
-                    
-                    // Then generate a text response
-                    const completion = await openaiClient.chat.completions.create({
-                        model: "gpt-4o-mini",
-                        messages: [
-                            {role: "system", content: "You are a helpful assistant in a VR Pong game."},
-                            {role: "user", content: transcript}
-                        ]
-                    });
-                    
-                    const responseText = completion.choices[0].message.content;
-                    console.log(`Generated text response for ${socket.id}: ${responseText.substring(0, 50)}...`);
-                    
-                    // Then convert to speech
-                    const mp3 = await openaiClient.audio.speech.create({
-                        model: "tts-1-hd",
-                        voice: "nova",
-                        input: responseText
-                    });
-                    
-                    // Convert to base64
-                    const buffer = Buffer.from(await mp3.arrayBuffer());
-                    const base64Audio = buffer.toString('base64');
-                    
-                    // Send both text and audio back to the client
-                    socket.emit('openai-transcription', transcript);
-                    socket.emit('openai-audio-stream-response', {
-                        audioData: base64Audio,
-                        text: responseText
-                    });
+                } catch (cleanupError) {
+                    console.error(`Error deleting temporary file ${tempFilePath}:`, cleanupError);
                 }
             }
             
-            // Clean up the temporary file
-            fs.unlink(tempFilePath, (err) => {
-                if (err) console.error(`Error deleting temporary file ${tempFilePath}:`, err);
-                else console.log(`Deleted temporary file ${tempFilePath}`);
-            });
         } catch (error) {
-            console.error(`OpenAI Audio Conversation API error for ${socket.id}:`, error);
-            socket.emit('openai-error', error.message);
+            console.error(`General error in audio processing for ${socket.id}:`, error);
+            socket.emit('openai-error', { error: error.message || 'An error occurred while processing audio' });
         }
     });
 });
@@ -854,5 +715,33 @@ function generateRoomId() {
 
 // Helper function to convert base64 audio to a buffer
 function base64ToBuffer(base64) {
-    return Buffer.from(base64.split(',')[1], 'base64');
+    if (!base64) {
+        console.error("Empty base64 data received");
+        return Buffer.from([]);
+    }
+    
+    try {
+        // Handle case where base64 might be a string or an object with audio property
+        let base64String = base64;
+        
+        // If it's an object with audio property, extract that
+        if (typeof base64 === 'object' && base64.audio) {
+            base64String = base64.audio;
+        }
+        
+        // Check if it's a data URL (starts with 'data:')
+        if (typeof base64String === 'string' && base64String.includes(',')) {
+            // It's a data URL, split at the comma
+            return Buffer.from(base64String.split(',')[1], 'base64');
+        } else if (typeof base64String === 'string') {
+            // It's already a base64 string without the data URL prefix
+            return Buffer.from(base64String, 'base64');
+        } else {
+            console.error("Invalid base64 format:", typeof base64String);
+            return Buffer.from([]);
+        }
+    } catch (error) {
+        console.error("Error converting base64 to buffer:", error);
+        return Buffer.from([]);
+    }
 }

@@ -91,15 +91,22 @@ export class AIAssistant {
         
         // New handler for true audio streaming responses
         this.socket.on('openai-audio-stream-response', (data) => {
-            const { audioData, text } = data;
-            console.log("AI Assistant: Received audio stream response from OpenAI");
+            const { audioData, text, model } = data;
+            console.log(`AI Assistant: Received audio stream response from OpenAI using model: ${model || 'unknown'}`);
             
             // Update the conversation with the text response if we have one
             if (text) {
-                this.updateLastAssistantMessage(text);
+                // If model info is available and not already in the text, add it as a prefix
+                if (model && !text.includes(model)) {
+                    const modelPrefix = `[${model}] `;
+                    this.updateLastAssistantMessage(text);
+                    console.log(`AI Assistant: Response generated using ${model}`);
+                } else {
+                    this.updateLastAssistantMessage(text);
+                }
             } else {
                 // Use a generic message if we don't have text
-                this.updateLastAssistantMessage("[Voice response from assistant]");
+                this.updateLastAssistantMessage(`[Voice response from assistant using ${model || 'AI'}]`);
             }
             
             // Play the audio response
@@ -111,15 +118,18 @@ export class AIAssistant {
         });
         
         // New listeners for streaming responses
-        this.socket.on('openai-transcription', (data) => {
-            const { transcription } = data;
+        this.socket.on('openai-transcription', (transcription) => {
             console.log("AI Assistant: Received transcription from OpenAI:", transcription);
             
-            // Update the conversation with the transcription
-            this.addMessageToConversation('user', transcription);
-            
-            // Add a placeholder for the assistant response
-            this.addMessageToConversation('assistant', '...');
+            // Update the last user message with the transcription if available
+            if (transcription && this.chatHistory.length > 0) {
+                // Find the latest user message and update it
+                const lastUserMsgIndex = this.chatHistory.findLastIndex(msg => msg.role === 'user');
+                if (lastUserMsgIndex !== -1) {
+                    this.chatHistory[lastUserMsgIndex].content = transcription;
+                    this.updateChatDisplay();
+                }
+            }
         });
         
         this.socket.on('openai-stream-chunk', (data) => {
@@ -1615,8 +1625,8 @@ export class AIAssistant {
                     
                     // Send to server via socket.io - use the audio streaming endpoint
                     if (this.socket) {
-                        // Send just the base64 string, not an object
-                        this.socket.emit('openai-audio-stream', base64Audio);
+                        // Send as an object with audio property to match server expectations
+                        this.socket.emit('openai-audio-stream', { audio: base64Audio });
                         console.log("AI Assistant: Audio sent to server for realtime streaming");
                         
                         // Reset status
