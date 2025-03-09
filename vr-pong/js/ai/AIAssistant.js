@@ -1583,7 +1583,7 @@ export class AIAssistant {
                 const wsUrl = 'wss://api.openai.com/v1/realtime/ws';
                 
                 // Create connection with proper protocol string
-                const signaling = new WebSocket(wsUrl, 'webcast-realtime');
+                const signaling = new WebSocket(wsUrl, 'json.reliable.webpubsub.azure.v1');
                 
                 // When the connection opens, authenticate with the token
                 signaling.onopen = () => {
