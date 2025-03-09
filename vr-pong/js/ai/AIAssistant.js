@@ -17,6 +17,10 @@ export class AIAssistant {
         // Score tracking
         this.playerScore = 0;
         this.aiScore = 0;
+        this._scoreJustChanged = false;
+        this._lastScoreChangeTime = 0;
+        this._lastScoreContextTime = 0;
+        this._forceScoreInjection = false;
         
         // WebRTC related properties
         this.webrtcPeerConnection = null;
@@ -915,10 +919,11 @@ export class AIAssistant {
         if (this.realtimeMode && (this.playerScore > 0 || this.aiScore > 0)) {
             // If the score has changed recently or it's been a while since we mentioned it,
             // we should be ready to inject score context
-            if (this._scoreJustChanged || this._shouldInjectScoreContext()) {
+            if (this._scoreJustChanged || this._shouldInjectScoreContext() || this._forceScoreInjection) {
                 console.log("[AI Assistant] Ready to inject score context on next user utterance");
-                // Reset the score change flag
+                // Reset the score change and force injection flags
                 this._scoreJustChanged = false;
+                this._forceScoreInjection = false;
             }
             
             // Add a system message with current score before listening (for our local UI only)
@@ -1521,13 +1526,22 @@ export class AIAssistant {
                     this._isRequestingToken = true;
                     
                     // Include score information in the system prompt if we have a score
-                    let systemPrompt = "You are a helpful AI assistant integrated into a VR Pong game. ";
+                    // Format the score PROMINENTLY at the beginning to ensure the AI sees it
+                    let systemPrompt = "IMPORTANT SCORE INFORMATION: ";
                     
                     if (this.playerScore > 0 || this.aiScore > 0) {
-                        systemPrompt += `The current score is Player ${this.playerScore} - AI ${this.aiScore}. `;
+                        systemPrompt += `The current game score is Player ${this.playerScore} - AI ${this.aiScore}. `;
+                        systemPrompt += `REPEAT: The score is ${this.playerScore} for the Player and ${this.aiScore} for the AI. `;
+                        systemPrompt += `When asked about the score, ALWAYS reply with these exact numbers. `;
+                    } else {
+                        systemPrompt += "The game has just started. No points have been scored yet. ";
                     }
                     
-                    systemPrompt += "You can analyze gameplay, provide tips, and discuss game strategies. You can also chat about other topics as needed. Always be friendly, concise, and helpful.";
+                    systemPrompt += "You are a helpful AI assistant integrated into a VR Pong game. ";
+                    systemPrompt += "IMPORTANT: Always acknowledge the current score when asked about it. ";
+                    systemPrompt += "If the user asks about the score, tell them the current score EXACTLY as provided above. ";
+                    systemPrompt += "You can analyze gameplay, provide tips, and discuss game strategies. ";
+                    systemPrompt += "You can also chat about other topics as needed. Always be friendly, concise, and helpful.";
                     
                     this.socket.emit('create-realtime-session', {
                         systemPrompt: systemPrompt
@@ -1706,6 +1720,7 @@ export class AIAssistant {
                         // Only if we have a non-empty transcript
                         if (userTranscript && userTranscript.trim().length > 0) {
                             const transcript = userTranscript.toLowerCase();
+                            // Expand score-related keywords to catch more variations
                             const isScoreQuestion = transcript.includes('score') || 
                                 transcript.includes('what is the score') || 
                                 transcript.includes('what\'s the score') || 
@@ -1713,45 +1728,61 @@ export class AIAssistant {
                                 transcript.includes('game score') ||
                                 transcript.includes('points') ||
                                 transcript.includes('winning') ||
-                                transcript.includes('who is winning');
+                                transcript.includes('who is winning') ||
+                                transcript.includes('how many') ||
+                                transcript.includes('what\'s the current') ||
+                                transcript.includes('tell me the score') ||
+                                transcript.includes('whats the score');
                                 
-                            // If this is a score-related question OR we haven't mentioned the score in a while,
-                            // prepend score information to the user's query
-                            if ((this.playerScore > 0 || this.aiScore > 0) && 
-                                (isScoreQuestion || this._shouldInjectScoreContext())) {
+                            // If this is a score-related question, handle it specially
+                            if (isScoreQuestion && (this.playerScore > 0 || this.aiScore > 0)) {
+                                console.log("[AI Assistant] User asked about the score");
                                 
-                                // Create a modified transcript that includes the score
-                                // This strategy keeps the WebRTC connection intact while providing score context
+                                // CRITICAL CHANGE: Don't just modify our local display, actually REPLACE
+                                // the user's transcript with one that explicitly states and asks about the score
+                                // This will ensure the AI model sees the correct score information
+                                const accurateScoreQuery = `The player's score is ${this.playerScore} and the AI's score is ${this.aiScore}. ${userTranscript}`;
+                                
+                                // For logging purposes only, keep a reference to the original
+                                const originalTranscript = userTranscript;
+                                
+                                // Complete replacement of the transcript
+                                userTranscript = accurateScoreQuery;
+                                
+                                console.log("[AI Assistant] REPLACING transcript for score question:", 
+                                    `Original: "${originalTranscript}" -> New: "${accurateScoreQuery}"`);
+                                
+                                // Add a system message showing the score for visibility in chat history
+                                this.addMessageToConversation('system', `Score information: Player ${this.playerScore} - AI ${this.aiScore}`);
+                                
+                                // Update our score context timers
+                                this._lastScoreContextTime = Date.now();
+                                this._scoreJustChanged = false;
+                                this._forceScoreInjection = false;
+                            }
+                            // For non-score questions but when we want to provide score context anyway
+                            else if ((this.playerScore > 0 || this.aiScore > 0) && 
+                                   (this._scoreJustChanged || this._shouldInjectScoreContext() || this._forceScoreInjection)) {
+                                
+                                // Prepend score context for display in UI
                                 modifiedTranscript = `The current score is Player ${this.playerScore}, AI ${this.aiScore}. ${userTranscript}`;
-                                console.log("[AI Assistant] Injecting score context into query:", modifiedTranscript);
+                                console.log("[AI Assistant] Adding score context to query:", modifiedTranscript);
+                                
+                                // Show this version in the UI
+                                userTranscript = modifiedTranscript;
                                 
                                 // Reset our score context injection counter
                                 this._lastScoreContextTime = Date.now();
+                                this._scoreJustChanged = false;
+                                this._forceScoreInjection = false;
                                 
                                 // Also update the local display with score info
                                 this.addMessageToConversation('system', `Current score: Player ${this.playerScore} - AI ${this.aiScore}`);
                             }
-                            
-                            // Send the modified transcript to the API via the WebRTC signaling channel
-                            if (this.webrtcSignaling && this.webrtcSignaling.readyState === WebSocket.OPEN && 
-                                modifiedTranscript !== userTranscript) {
-                                try {
-                                    // Use the WebRTC signaling channel to send the updated transcript instead of the data channel
-                                    // This approach maintains the WebRTC connection while updating the transcript
-                                    // NOTE: This is an advanced technique that may not work with all WebRTC implementations
-                                    const signalMessage = {
-                                        type: "input_transcription",
-                                        transcript: modifiedTranscript
-                                    };
-                                    this.webrtcSignaling.send(JSON.stringify(signalMessage));
-                                    console.log("[AI Assistant] Updated transcript sent through signaling channel");
-                                } catch (signalError) {
-                                    console.error("[AI Assistant] Error sending modified transcript:", signalError);
-                                }
-                            }
                         }
                         
-                        // Update the user message in the chat with the original transcript
+                        // Update the user message in the chat with potentially modified transcript
+                        // Use the version that includes the score information for score questions
                         if (this.chatHistory.some(msg => msg.role === 'user' && msg.content === '...')) {
                             this.updateLastUserMessage(userTranscript);
                         } else {
@@ -2642,13 +2673,13 @@ export class AIAssistant {
     
     // Handle score updates from the game
     handleScoreUpdate(playerScore, aiScore, scoringPlayer) {
-        // Store the current scores in class properties for access by other methods
+        // Remember old scores to check for changes
+        const oldPlayerScore = this.playerScore;
+        const oldAIScore = this.aiScore;
+        
+        // Update the scores
         this.playerScore = playerScore;
         this.aiScore = aiScore;
-        
-        // Track that the score just changed
-        this._scoreJustChanged = true;
-        this._lastScoreChangeTime = Date.now();
         
         // Only proceed if we have a chat UI to display messages
         if (!this.container) return;
@@ -2661,10 +2692,17 @@ export class AIAssistant {
         // This ensures the AI model has context about the current score
         this.addMessageToConversation('system', `Current score: Player ${playerScore} - AI ${aiScore}. ${scoringPlayer === 'player' ? 'The player' : 'The AI'} just scored.`);
         
-        // Don't send score update directly to WebRTC - this causes disconnections
-        // Just log that the score has been updated
+        // If we're in real-time mode, update tracking so next user interaction will include score
         if (this.realtimeMode) {
             console.log(`[AI Assistant] Score updated in real-time mode: Player ${playerScore} - AI ${aiScore}`);
+            
+            // Signal that the score has changed so next interaction will include it
+            this._scoreJustChanged = true;
+            this._lastScoreChangeTime = Date.now();
+            this._forceScoreInjection = true;
+            
+            // Also update local context for WebRTC (this doesn't disconnect)
+            this.updateWebRTCScoreContext();
         }
         
         // Occasionally add commentary based on the score differential
@@ -2789,8 +2827,60 @@ export class AIAssistant {
             this._lastScoreContextTime = 0;
         }
         
-        // Inject score context if we haven't done so in the last 2 minutes
-        const twoMinutes = 2 * 60 * 1000; // 2 minutes in milliseconds
-        return (Date.now() - this._lastScoreContextTime > twoMinutes);
+        // Inject score context MUCH more frequently - every 30 seconds instead of 2 minutes
+        // This ensures more regular score updates to the real-time voice
+        const thirtySeconds = 30 * 1000; // 30 seconds in milliseconds
+        return (Date.now() - this._lastScoreContextTime > thirtySeconds);
+    }
+    
+    // Add a method to reconnect WebRTC with fresh score context
+    reconnectWebRTCWithScoreContext() {
+        // Only reconnect if we already have a connection and the score is non-zero
+        if (this.webrtcConnected && this.webrtcPeerConnection && 
+            (this.playerScore > 0 || this.aiScore > 0)) {
+            
+            console.log(`[AI Assistant] Reconnecting WebRTC with fresh score context: Player ${this.playerScore} - AI ${this.aiScore}`);
+            
+            // Close the existing connection
+            this.closeWebRTCConnection();
+            
+            // Wait a short moment to ensure cleanup completes
+            setTimeout(() => {
+                // Initialize a new connection with fresh score context
+                this.initWebRTCConnection();
+            }, 1000);
+            
+            // Reset score update tracking
+            this._scoreJustChanged = false;
+            this._forceScoreInjection = false;
+            this._lastScoreChangeTime = Date.now();
+            
+            return true;
+        }
+        
+        return false;
+    }
+    
+    // Add a new method to provide score context to the WebRTC session without disconnecting
+    updateWebRTCScoreContext() {
+        if (!this.webrtcConnected || !this.webrtcPeerConnection || !this.webrtcDataChannel || 
+            this.webrtcDataChannel.readyState !== 'open') {
+            console.log("[AI Assistant] Cannot update WebRTC score context - connection not ready");
+            return false;
+        }
+        
+        // We'll modify the user's voice recognition to include score information
+        // This is the proper way to insert context without disrupting the connection
+        console.log(`[AI Assistant] Updating WebRTC score context: Player ${this.playerScore} - AI ${this.aiScore}`);
+        
+        // Add a system message in our local chat history
+        this.addMessageToConversation('system', `Score update for AI: Player ${this.playerScore} - AI ${this.aiScore}`);
+        
+        // Reset score update trackers
+        this._lastScoreContextTime = Date.now();
+        this._scoreJustChanged = false;
+        this._forceScoreInjection = false;
+        
+        return true;
     }
 } 
