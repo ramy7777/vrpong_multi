@@ -89,6 +89,37 @@ export class AIAssistant {
             }
         });
         
+        // New listeners for streaming responses
+        this.socket.on('openai-transcription', (data) => {
+            const { transcription } = data;
+            console.log("AI Assistant: Received transcription from OpenAI:", transcription);
+            
+            // Update the conversation with the transcription
+            this.addMessageToConversation('user', transcription);
+            
+            // Add a placeholder for the assistant response
+            this.addMessageToConversation('assistant', '...');
+        });
+        
+        this.socket.on('openai-stream-chunk', (data) => {
+            const { text } = data;
+            
+            // Update the last assistant message with the new chunk
+            const lastMessageContent = this.findLastAssistantMessage() || '';
+            const updatedContent = lastMessageContent === '...' ? text : lastMessageContent + text;
+            this.updateLastAssistantMessage(updatedContent);
+        });
+        
+        this.socket.on('openai-speech-response', (data) => {
+            const { audio } = data;
+            console.log("AI Assistant: Received speech audio from OpenAI");
+            
+            // Play the audio response
+            if (audio) {
+                this.playOpenAIAudio(audio);
+            }
+        });
+        
         // Listen for OpenAI setup status
         this.socket.on('openai-key-status', (data) => {
             if (data.success) {
@@ -144,6 +175,10 @@ export class AIAssistant {
         this.socket.on('openai-error', (data) => {
             console.error("OpenAI error from server:", data.error);
             this.showMessage(data.error || "Error communicating with OpenAI");
+            
+            // If there was an ongoing recording/conversation, reset the state
+            this.isListening = false;
+            this.isSpeaking = false;
         });
     }
     

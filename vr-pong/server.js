@@ -637,36 +637,47 @@ io.on('connection', (socket) => {
                 ];
             }
             
-            // Step 2: Generate a response using the conversation history
+            // Send the transcription to the client immediately
+            socket.emit('openai-transcription', { transcription });
+            
+            // Step 2: Generate a streaming response using GPT-4o mini's streaming capability
+            let fullResponse = ''; // Variable to collect the full response
+            
             const completion = await openaiClient.chat.completions.create({
                 messages: userChatHistories[socket.id],
                 model: "gpt-4o-mini",
+                stream: true, // Enable streaming
             });
             
-            const response = completion.choices[0].message.content;
+            // Set up streaming response
+            for await (const chunk of completion) {
+                if (chunk.choices[0]?.delta?.content) {
+                    const contentChunk = chunk.choices[0].delta.content;
+                    fullResponse += contentChunk;
+                    
+                    // Send each chunk to the client for real-time display
+                    socket.emit('openai-stream-chunk', { text: contentChunk });
+                }
+            }
             
             // Add assistant response to history
-            userChatHistories[socket.id].push({ role: "assistant", content: response });
+            userChatHistories[socket.id].push({ role: "assistant", content: fullResponse });
             
-            console.log(`Generated text response for ${socket.id}: ${response.substring(0, 50)}...`);
+            console.log(`Generated full text response for ${socket.id}: ${fullResponse.substring(0, 50)}...`);
             
             // Step 3: Convert the text response to speech using OpenAI's TTS
             const audioResponse = await openaiClient.audio.speech.create({
                 model: "tts-1",
                 voice: "alloy",
-                input: response,
+                input: fullResponse,
             });
             
             // Get audio as binary data and convert to base64
             const speechBuffer = Buffer.from(await audioResponse.arrayBuffer());
             const audioBase64 = `data:audio/mp3;base64,${speechBuffer.toString('base64')}`;
             
-            // Send both the text and audio response to the client
-            socket.emit('openai-realtime-response', { 
-                text: response,
-                audio: audioBase64,
-                transcription: transcription
-            });
+            // Send the audio response to the client
+            socket.emit('openai-speech-response', { audio: audioBase64 });
             
         } catch (error) {
             console.error(`OpenAI API error for ${socket.id}:`, error);
