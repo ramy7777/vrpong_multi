@@ -89,6 +89,27 @@ export class AIAssistant {
             }
         });
         
+        // New handler for true audio streaming responses
+        this.socket.on('openai-audio-stream-response', (data) => {
+            const { audioData, text } = data;
+            console.log("AI Assistant: Received audio stream response from OpenAI");
+            
+            // Update the conversation with the text response if we have one
+            if (text) {
+                this.updateLastAssistantMessage(text);
+            } else {
+                // Use a generic message if we don't have text
+                this.updateLastAssistantMessage("[Voice response from assistant]");
+            }
+            
+            // Play the audio response
+            if (audioData) {
+                // Create the data URL with the proper MIME type
+                const audioDataUrl = `data:audio/mp3;base64,${audioData}`;
+                this.playOpenAIAudio(audioDataUrl);
+            }
+        });
+        
         // New listeners for streaming responses
         this.socket.on('openai-transcription', (data) => {
             const { transcription } = data;
@@ -172,9 +193,13 @@ export class AIAssistant {
         });
         
         // Listen for OpenAI errors
-        this.socket.on('openai-error', (data) => {
-            console.error("OpenAI error from server:", data.error);
-            this.showMessage(data.error || "Error communicating with OpenAI");
+        this.socket.on('openai-error', (error) => {
+            // Error can be either a string or an object with an error property
+            const errorMessage = typeof error === 'string' ? error : 
+                                 (error && error.error ? error.error : "Unknown error communicating with OpenAI");
+            
+            console.error("OpenAI error from server:", errorMessage);
+            this.showMessage(errorMessage);
             
             // If there was an ongoing recording/conversation, reset the state
             this.isListening = false;
@@ -1585,46 +1610,38 @@ export class AIAssistant {
                 try {
                     const base64Audio = reader.result;
                     
-                    // Send to server via socket.io
+                    // Add a placeholder message for the assistant's response
+                    this.addMessageToConversation('user', '...');
+                    
+                    // Send to server via socket.io - use the audio streaming endpoint
                     if (this.socket) {
-                        // Add a placeholder message for the assistant's response
-                        this.addMessageToConversation('user', '...');
-                        
-                        // Send the audio data to the server
-                        this.socket.emit('openai-audio-chat', { audio: base64Audio });
-                        console.log("AI Assistant: Audio sent to server");
+                        // Send just the base64 string, not an object
+                        this.socket.emit('openai-audio-stream', base64Audio);
+                        console.log("AI Assistant: Audio sent to server for realtime streaming");
                         
                         // Reset status
                         this.isListening = false;
                         this.recordedChunks = [];
                     } else {
                         console.error("AI Assistant: No socket available to send audio");
+                        this.showMessage("Error: Cannot connect to server");
                         this.isListening = false;
-                        this.showMessage("Cannot connect to server. Please try again.");
-                        
-                        // Fall back to text mode if possible
-                        if (!this.isRealtimeMode) {
-                            this.toggleRealtimeMode();
-                        }
+                        this.recordedChunks = [];
                     }
-                } catch (error) {
-                    console.error("AI Assistant: Error converting or sending audio:", error);
+                } catch (e) {
+                    console.error("AI Assistant: Error sending audio to server:", e);
+                    this.showMessage("Error sending audio. Please try again.");
                     this.isListening = false;
-                    this.showMessage("Error processing audio. Please try again.");
+                    this.recordedChunks = [];
                 }
             };
             
-            reader.onerror = (error) => {
-                console.error("AI Assistant: Error reading audio data:", error);
-                this.isListening = false;
-                this.showMessage("Error reading audio data. Please try again.");
-            };
-            
             reader.readAsDataURL(audioBlob);
-        } catch (error) {
-            console.error("AI Assistant: Error processing audio chunks:", error);
-            this.isListening = false;
+        } catch (e) {
+            console.error("AI Assistant: Error processing audio:", e);
             this.showMessage("Error processing audio. Please try again.");
+            this.isListening = false;
+            this.recordedChunks = [];
         }
     }
     
