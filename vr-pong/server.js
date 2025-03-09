@@ -456,7 +456,7 @@ io.on('connection', (socket) => {
             console.log(`Processing OpenAI request for ${socket.id}`);
             const completion = await openaiClient.chat.completions.create({
                 messages: [
-                    { role: "system", content: "You are an AI assistant for a VR Pong game. Be concise, helpful, and friendly. Provide tips and guidance for playing the game." },
+                    { role: "system", content: "You are a friendly and helpful AI assistant in a VR Pong game environment. While you can provide tips and guidance about the game, you're also capable of having general conversations on a wide range of topics. Be engaging, informative, and personable." },
                     { role: "user", content: data.message }
                 ],
                 model: "gpt-3.5-turbo",
@@ -523,7 +523,7 @@ io.on('connection', (socket) => {
             
             // Test the API key with a simple completion to verify it works
             openaiClient.chat.completions.create({
-                messages: [{ role: "system", content: "You are a helpful assistant." }],
+                messages: [{ role: "system", content: "You are a friendly and helpful AI assistant capable of general conversation as well as providing guidance for a VR Pong game." }],
                 model: "gpt-3.5-turbo",
                 max_tokens: 5
             }).then(() => {

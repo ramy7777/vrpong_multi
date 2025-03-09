@@ -82,8 +82,8 @@ export class AIAssistant {
                 this.showChatUI();
                 
                 // Add a welcome message
-                this.addMessageToConversation('assistant', 'Hello! I\'m your AI assistant. How can I help you with your Pong game today?');
-                this.speakText('Hello! I\'m your AI assistant. How can I help you with your Pong game today?');
+                this.addMessageToConversation('assistant', 'Hello! I\'m your AI assistant. I can help with your Pong game or we can chat about anything you\'d like to discuss.');
+                this.speakText('Hello! I\'m your AI assistant. I can help with your Pong game or we can chat about anything you\'d like to discuss.');
             } else {
                 console.error("API key error:", data.error);
                 this.showMessage(`Error setting API key: ${data.error}`);
@@ -279,7 +279,7 @@ export class AIAssistant {
                         this.hideSetupUI();
                         this.createChatUI();
                         this.showChatUI();
-                        this.addMessageToConversation('assistant', 'Hello! I\'m your AI assistant. How can I help you with your Pong game today?');
+                        this.addMessageToConversation('assistant', 'Hello! I\'m your AI assistant. I can help with your Pong game or we can chat about anything you\'d like to discuss.');
                     }, 1000);
                 }).catch(error => {
                     statusMsg.textContent = 'Failed to connect: ' + error.message;
@@ -296,7 +296,7 @@ export class AIAssistant {
             this.hideSetupUI();
             this.createChatUI();
             this.showChatUI();
-            this.addMessageToConversation('assistant', 'Hello! I\'m your AI assistant. Voice features are limited without an API key, but I\'ll do my best to help.');
+            this.addMessageToConversation('assistant', 'Hello! I\'m your AI assistant. Voice features are limited without an API key, but I\'ll do my best to help with any questions you have.');
         });
         
         // Add elements to container
@@ -640,7 +640,7 @@ export class AIAssistant {
         }, 8000);
         
         // Add welcome message
-        this.addMessageToConversation("assistant", "Hello! I'm your AI assistant. How can I help you with your Pong game today?");
+        this.addMessageToConversation("assistant", "Hello! I'm your AI assistant. I can help with your Pong game or we can chat about anything you'd like to discuss.");
         
         console.log("AI Assistant: Chat UI created");
         
